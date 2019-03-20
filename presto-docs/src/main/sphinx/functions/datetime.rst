@@ -67,16 +67,16 @@ Date and Time Functions
 
 .. function:: from_unixtime(unixtime) -> timestamp
 
-    Returns the UNIX timestamp ``unixtime`` as a timestamp.
+    Returns the UNIX timestamp in seconds ``unixtime`` as a timestamp.
 
 .. function:: from_unixtime(unixtime, string) -> timestamp with time zone
 
-    Returns the UNIX timestamp ``unixtime`` as a timestamp with time zone
+    Returns the UNIX timestamp in seconds ``unixtime`` as a timestamp with time zone
     using ``string`` for the time zone.
 
 .. function:: from_unixtime(unixtime, hours, minutes) -> timestamp with time zone
 
-    Returns the UNIX timestamp ``unixtime`` as a timestamp with time zone
+    Returns the UNIX timestamp in seconds ``unixtime`` as a timestamp with time zone
     using ``hours`` and ``minutes`` for the time zone offset.
 
 .. function:: localtime -> time

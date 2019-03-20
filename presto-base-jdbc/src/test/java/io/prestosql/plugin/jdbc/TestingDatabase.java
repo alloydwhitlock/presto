@@ -13,7 +13,6 @@
  */
 package io.prestosql.plugin.jdbc;
 
-import com.google.common.collect.ImmutableMap;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorSplitSource;
 import io.prestosql.spi.connector.SchemaTableName;
@@ -23,22 +22,18 @@ import org.h2.Driver;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
-import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static io.prestosql.spi.connector.NotPartitionedPartitionHandle.NOT_PARTITIONED;
-import static io.prestosql.testing.TestingSession.testSessionBuilder;
+import static java.util.function.Function.identity;
 
 final class TestingDatabase
         implements AutoCloseable
 {
-    public static final String CONNECTOR_ID = "test";
-    private static final ConnectorSession session = testSessionBuilder().build().toConnectorSession();
-
     private final Connection connection;
     private final JdbcClient jdbcClient;
 
@@ -47,7 +42,6 @@ final class TestingDatabase
     {
         String connectionUrl = "jdbc:h2:mem:test" + System.nanoTime();
         jdbcClient = new BaseJdbcClient(
-                new JdbcConnectorId(CONNECTOR_ID),
                 new BaseJdbcConfig(),
                 "\"",
                 new DriverConnectionFactory(new Driver(), connectionUrl, new Properties()));
@@ -94,24 +88,22 @@ final class TestingDatabase
         return jdbcClient;
     }
 
-    public JdbcSplit getSplit(String schemaName, String tableName)
+    public JdbcTableHandle getTableHandle(ConnectorSession session, SchemaTableName table)
     {
-        JdbcTableHandle jdbcTableHandle = jdbcClient.getTableHandle(new SchemaTableName(schemaName, tableName));
-        JdbcTableLayoutHandle jdbcLayoutHandle = new JdbcTableLayoutHandle(jdbcTableHandle, TupleDomain.all());
-        ConnectorSplitSource splits = jdbcClient.getSplits(jdbcLayoutHandle);
+        return jdbcClient.getTableHandle(JdbcIdentity.from(session), table)
+                .orElseThrow(() -> new IllegalArgumentException("table not found: " + table));
+    }
+
+    public JdbcSplit getSplit(ConnectorSession session, JdbcTableHandle table)
+    {
+        JdbcTableLayoutHandle jdbcLayoutHandle = new JdbcTableLayoutHandle(table, TupleDomain.all());
+        ConnectorSplitSource splits = jdbcClient.getSplits(JdbcIdentity.from(session), jdbcLayoutHandle);
         return (JdbcSplit) getOnlyElement(getFutureValue(splits.getNextBatch(NOT_PARTITIONED, 1000)).getSplits());
     }
 
-    public Map<String, JdbcColumnHandle> getColumnHandles(String schemaName, String tableName)
+    public Map<String, JdbcColumnHandle> getColumnHandles(ConnectorSession session, JdbcTableHandle table)
     {
-        JdbcTableHandle tableHandle = jdbcClient.getTableHandle(new SchemaTableName(schemaName, tableName));
-        List<JdbcColumnHandle> columns = jdbcClient.getColumns(session, tableHandle);
-        checkArgument(columns != null, "table not found: %s.%s", schemaName, tableName);
-
-        ImmutableMap.Builder<String, JdbcColumnHandle> columnHandles = ImmutableMap.builder();
-        for (JdbcColumnHandle column : columns) {
-            columnHandles.put(column.getColumnMetadata().getName(), column);
-        }
-        return columnHandles.build();
+        return jdbcClient.getColumns(session, table).stream()
+                .collect(toImmutableMap(column -> column.getColumnMetadata().getName(), identity()));
     }
 }

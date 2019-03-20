@@ -14,10 +14,6 @@
 package io.prestosql.sql.planner.optimizations;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.cache.CacheBuilder;
-import com.google.common.cache.CacheLoader;
-import com.google.common.cache.LoadingCache;
-import com.google.common.collect.ComparisonChain;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableSet;
@@ -30,7 +26,6 @@ import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.connector.GroupingProperty;
 import io.prestosql.spi.connector.LocalProperty;
 import io.prestosql.spi.connector.SortingProperty;
-import io.prestosql.sql.parser.SqlParser;
 import io.prestosql.sql.planner.DomainTranslator;
 import io.prestosql.sql.planner.LiteralEncoder;
 import io.prestosql.sql.planner.Partitioning;
@@ -38,8 +33,9 @@ import io.prestosql.sql.planner.PartitioningScheme;
 import io.prestosql.sql.planner.PlanNodeIdAllocator;
 import io.prestosql.sql.planner.Symbol;
 import io.prestosql.sql.planner.SymbolAllocator;
+import io.prestosql.sql.planner.TypeAnalyzer;
 import io.prestosql.sql.planner.TypeProvider;
-import io.prestosql.sql.planner.iterative.rule.PickTableLayout;
+import io.prestosql.sql.planner.iterative.rule.PushPredicateIntoTableScan;
 import io.prestosql.sql.planner.plan.AggregationNode;
 import io.prestosql.sql.planner.plan.ApplyNode;
 import io.prestosql.sql.planner.plan.Assignments;
@@ -78,10 +74,7 @@ import io.prestosql.sql.tree.Expression;
 import io.prestosql.sql.tree.SymbolReference;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -89,7 +82,6 @@ import java.util.Set;
 import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
@@ -120,15 +112,15 @@ import static java.util.stream.Collectors.toList;
 public class AddExchanges
         implements PlanOptimizer
 {
-    private final SqlParser parser;
+    private final TypeAnalyzer typeAnalyzer;
     private final Metadata metadata;
     private final DomainTranslator domainTranslator;
 
-    public AddExchanges(Metadata metadata, SqlParser parser)
+    public AddExchanges(Metadata metadata, TypeAnalyzer typeAnalyzer)
     {
         this.metadata = metadata;
         this.domainTranslator = new DomainTranslator(new LiteralEncoder(metadata.getBlockEncodingSerde()));
-        this.parser = parser;
+        this.typeAnalyzer = typeAnalyzer;
     }
 
     @Override
@@ -499,7 +491,11 @@ public class AddExchanges
         public PlanWithProperties visitFilter(FilterNode node, PreferredProperties preferredProperties)
         {
             if (node.getSource() instanceof TableScanNode) {
-                return planTableScan((TableScanNode) node.getSource(), node.getPredicate(), preferredProperties);
+                Optional<PlanWithProperties> plan = planTableScan((TableScanNode) node.getSource(), node.getPredicate());
+
+                if (plan.isPresent()) {
+                    return plan.get();
+                }
             }
 
             return rebaseAndDeriveProperties(node, planChild(node, preferredProperties));
@@ -508,7 +504,8 @@ public class AddExchanges
         @Override
         public PlanWithProperties visitTableScan(TableScanNode node, PreferredProperties preferredProperties)
         {
-            return planTableScan(node, TRUE_LITERAL, preferredProperties);
+            return planTableScan(node, TRUE_LITERAL)
+                    .orElseGet(() -> new PlanWithProperties(node, deriveProperties(node, ImmutableList.of())));
         }
 
         @Override
@@ -538,28 +535,10 @@ public class AddExchanges
             return rebaseAndDeriveProperties(node, source);
         }
 
-        private PlanWithProperties planTableScan(TableScanNode node, Expression predicate, PreferredProperties preferredProperties)
+        private Optional<PlanWithProperties> planTableScan(TableScanNode node, Expression predicate)
         {
-            List<PlanNode> possiblePlans = PickTableLayout.listTableLayouts(node, predicate, true, session, types, idAllocator, metadata, parser, domainTranslator);
-            List<PlanWithProperties> possiblePlansWithProperties = possiblePlans.stream()
-                    .map(planNode -> new PlanWithProperties(planNode, derivePropertiesRecursively(planNode)))
-                    .collect(toImmutableList());
-            return pickPlan(possiblePlansWithProperties, preferredProperties);
-        }
-
-        /**
-         * possiblePlans should be provided in layout preference order
-         */
-        private PlanWithProperties pickPlan(List<PlanWithProperties> possiblePlans, PreferredProperties preferredProperties)
-        {
-            checkArgument(!possiblePlans.isEmpty());
-
-            if (preferStreamingOperators) {
-                possiblePlans = new ArrayList<>(possiblePlans);
-                Collections.sort(possiblePlans, Comparator.comparing(PlanWithProperties::getProperties, streamingExecutionPreference(preferredProperties))); // stable sort; is Collections.min() guaranteed to be stable?
-            }
-
-            return possiblePlans.get(0);
+            return PushPredicateIntoTableScan.pushFilterIntoTableScan(node, predicate, true, session, types, idAllocator, metadata, typeAnalyzer, domainTranslator)
+                    .map(plan -> new PlanWithProperties(plan, derivePropertiesRecursively(plan)));
         }
 
         @Override
@@ -762,7 +741,8 @@ public class AddExchanges
                     node.getFilter(),
                     node.getLeftHashSymbol(),
                     node.getRightHashSymbol(),
-                    Optional.of(newDistributionType));
+                    Optional.of(newDistributionType),
+                    node.isSpillable());
 
             return new PlanWithProperties(result, deriveProperties(result, ImmutableList.of(newLeft.getProperties(), newRight.getProperties())));
         }
@@ -1215,7 +1195,7 @@ public class AddExchanges
         private ActualProperties deriveProperties(PlanNode result, List<ActualProperties> inputProperties)
         {
             // TODO: move this logic to PlanSanityChecker once PropertyDerivations.deriveProperties fully supports local exchanges
-            ActualProperties outputProperties = PropertyDerivations.deriveProperties(result, inputProperties, metadata, session, types, parser);
+            ActualProperties outputProperties = PropertyDerivations.deriveProperties(result, inputProperties, metadata, session, types, typeAnalyzer);
             verify(result instanceof SemiJoinNode || inputProperties.stream().noneMatch(ActualProperties::isNullsAndAnyReplicated) || outputProperties.isNullsAndAnyReplicated(),
                     "SemiJoinNode is the only node that can strip null replication");
             return outputProperties;
@@ -1223,7 +1203,7 @@ public class AddExchanges
 
         private ActualProperties derivePropertiesRecursively(PlanNode result)
         {
-            return PropertyDerivations.derivePropertiesRecursively(result, metadata, session, types, parser);
+            return PropertyDerivations.derivePropertiesRecursively(result, metadata, session, types, typeAnalyzer);
         }
     }
 
@@ -1236,74 +1216,6 @@ public class AddExchanges
             }
         }
         return outputToInput;
-    }
-
-    @VisibleForTesting
-    static Comparator<ActualProperties> streamingExecutionPreference(PreferredProperties preferred)
-    {
-        // Calculating the matches can be a bit expensive, so cache the results between comparisons
-        LoadingCache<List<LocalProperty<Symbol>>, List<Optional<LocalProperty<Symbol>>>> matchCache = CacheBuilder.newBuilder()
-                .build(CacheLoader.from(actualProperties -> LocalProperties.match(actualProperties, preferred.getLocalProperties())));
-
-        return (actual1, actual2) -> {
-            List<Optional<LocalProperty<Symbol>>> matchLayout1 = matchCache.getUnchecked(actual1.getLocalProperties());
-            List<Optional<LocalProperty<Symbol>>> matchLayout2 = matchCache.getUnchecked(actual2.getLocalProperties());
-
-            return ComparisonChain.start()
-                    .compareTrueFirst(hasLocalOptimization(preferred.getLocalProperties(), matchLayout1), hasLocalOptimization(preferred.getLocalProperties(), matchLayout2))
-                    .compareTrueFirst(meetsPartitioningRequirements(preferred, actual1), meetsPartitioningRequirements(preferred, actual2))
-                    .compare(matchLayout1, matchLayout2, matchedLayoutPreference())
-                    .result();
-        };
-    }
-
-    private static <T> boolean hasLocalOptimization(List<LocalProperty<T>> desiredLayout, List<Optional<LocalProperty<T>>> matchResult)
-    {
-        checkArgument(desiredLayout.size() == matchResult.size());
-        if (matchResult.isEmpty()) {
-            return false;
-        }
-        // Optimizations can be applied if the first LocalProperty has been modified in the match in any way
-        return !matchResult.get(0).equals(Optional.of(desiredLayout.get(0)));
-    }
-
-    private static boolean meetsPartitioningRequirements(PreferredProperties preferred, ActualProperties actual)
-    {
-        if (!preferred.getGlobalProperties().isPresent()) {
-            return true;
-        }
-        PreferredProperties.Global preferredGlobal = preferred.getGlobalProperties().get();
-        if (!preferredGlobal.isDistributed()) {
-            return actual.isSingleNode();
-        }
-        if (!preferredGlobal.getPartitioningProperties().isPresent()) {
-            return !actual.isSingleNode();
-        }
-        return actual.isStreamPartitionedOn(preferredGlobal.getPartitioningProperties().get().getPartitioningColumns());
-    }
-
-    // Prefer the match result that satisfied the most requirements
-    private static <T> Comparator<List<Optional<LocalProperty<T>>>> matchedLayoutPreference()
-    {
-        return (matchLayout1, matchLayout2) -> {
-            Iterator<Optional<LocalProperty<T>>> match1Iterator = matchLayout1.iterator();
-            Iterator<Optional<LocalProperty<T>>> match2Iterator = matchLayout2.iterator();
-            while (match1Iterator.hasNext() && match2Iterator.hasNext()) {
-                Optional<LocalProperty<T>> match1 = match1Iterator.next();
-                Optional<LocalProperty<T>> match2 = match2Iterator.next();
-                if (match1.isPresent() && match2.isPresent()) {
-                    return Integer.compare(match1.get().getColumns().size(), match2.get().getColumns().size());
-                }
-                else if (match1.isPresent()) {
-                    return 1;
-                }
-                else if (match2.isPresent()) {
-                    return -1;
-                }
-            }
-            checkState(!match1Iterator.hasNext() && !match2Iterator.hasNext()); // Should be the same size
-            return 0;
-        };
     }
 
     @VisibleForTesting

@@ -25,6 +25,7 @@ import io.prestosql.spi.block.LongArrayBlock;
 import io.prestosql.spi.block.RunLengthEncodedBlock;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.type.Type;
+import org.testng.annotations.AfterClass;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
@@ -54,6 +55,12 @@ public class TestDictionaryAwarePageProjection
     public static Object[][] forceYield()
     {
         return new Object[][] {{true}, {false}};
+    }
+
+    @AfterClass(alwaysRun = true)
+    public void tearDown()
+    {
+        executor.shutdownNow();
     }
 
     @Test
@@ -313,7 +320,7 @@ public class TestDictionaryAwarePageProjection
             return new TestPageProjectionWork(yieldSignal, page, selectedPositions);
         }
 
-        private class TestPageProjectionWork
+        private static class TestPageProjectionWork
                 implements Work<Block>
         {
             private final DriverYieldSignal yieldSignal;

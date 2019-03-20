@@ -25,13 +25,13 @@ import org.openjdk.jol.info.ClassLayout;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.time.ZoneId;
 import java.util.List;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static io.prestosql.orc.metadata.ColumnEncoding.ColumnEncodingKind.DICTIONARY;
 import static io.prestosql.orc.metadata.ColumnEncoding.ColumnEncodingKind.DIRECT;
 import static io.prestosql.orc.metadata.ColumnEncoding.ColumnEncodingKind.DIRECT_V2;
-import static io.prestosql.orc.metadata.ColumnEncoding.ColumnEncodingKind.DWRF_DIRECT;
 import static java.util.Objects.requireNonNull;
 
 public class LongStreamReader
@@ -65,13 +65,11 @@ public class LongStreamReader
     }
 
     @Override
-    public void startStripe(InputStreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
+    public void startStripe(ZoneId timeZone, InputStreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
             throws IOException
     {
-        ColumnEncodingKind kind = encoding.get(streamDescriptor.getStreamId())
-                .getColumnEncoding(streamDescriptor.getSequence())
-                .getColumnEncodingKind();
-        if (kind == DIRECT || kind == DIRECT_V2 || kind == DWRF_DIRECT) {
+        ColumnEncodingKind kind = encoding.get(streamDescriptor.getStreamId()).getColumnEncodingKind();
+        if (kind == DIRECT || kind == DIRECT_V2) {
             currentReader = directReader;
         }
         else if (kind == DICTIONARY) {
@@ -81,7 +79,7 @@ public class LongStreamReader
             throw new IllegalArgumentException("Unsupported encoding " + kind);
         }
 
-        currentReader.startStripe(dictionaryStreamSources, encoding);
+        currentReader.startStripe(timeZone, dictionaryStreamSources, encoding);
     }
 
     @Override
@@ -103,8 +101,8 @@ public class LongStreamReader
     public void close()
     {
         try (Closer closer = Closer.create()) {
-            closer.register(() -> directReader.close());
-            closer.register(() -> dictionaryReader.close());
+            closer.register(directReader::close);
+            closer.register(dictionaryReader::close);
         }
         catch (IOException e) {
             throw new UncheckedIOException(e);

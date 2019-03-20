@@ -109,7 +109,6 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -124,7 +123,6 @@ import static java.util.stream.Collectors.joining;
 public final class SqlFormatter
 {
     private static final String INDENT = "   ";
-    private static final Pattern NAME_PATTERN = Pattern.compile("[a-z_][a-z0-9_]*");
 
     private SqlFormatter() {}
 
@@ -683,7 +681,7 @@ public final class SqlFormatter
         {
             builder.append("SHOW STATS FOR ");
             process(node.getRelation(), 0);
-            builder.append("");
+
             return null;
         }
 
@@ -873,11 +871,16 @@ public final class SqlFormatter
 
         private String formatColumnDefinition(ColumnDefinition column)
         {
-            return formatExpression(column.getName(), parameters) + " " + column.getType() +
-                    column.getComment()
-                            .map(comment -> " COMMENT " + formatStringLiteral(comment))
-                            .orElse("") +
-                    formatPropertiesSingleLine(column.getProperties());
+            StringBuilder sb = new StringBuilder()
+                    .append(formatExpression(column.getName(), parameters))
+                    .append(" ").append(column.getType());
+            if (!column.isNullable()) {
+                sb.append(" NOT NULL");
+            }
+            column.getComment().ifPresent(comment ->
+                    sb.append(" COMMENT ").append(formatStringLiteral(comment)));
+            sb.append(formatPropertiesSingleLine(column.getProperties()));
+            return sb.toString();
         }
 
         private static String formatGrantor(GrantorSpecification grantor)

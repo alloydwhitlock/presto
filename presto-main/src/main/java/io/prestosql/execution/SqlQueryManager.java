@@ -26,7 +26,7 @@ import io.prestosql.execution.QueryExecution.QueryExecutionFactory;
 import io.prestosql.execution.QueryExecution.QueryOutputInfo;
 import io.prestosql.execution.QueryPreparer.PreparedQuery;
 import io.prestosql.execution.StateMachine.StateChangeListener;
-import io.prestosql.execution.resourceGroups.ResourceGroupManager;
+import io.prestosql.execution.resourcegroups.ResourceGroupManager;
 import io.prestosql.execution.scheduler.NodeSchedulerConfig;
 import io.prestosql.execution.warnings.WarningCollectorFactory;
 import io.prestosql.memory.ClusterMemoryManager;
@@ -98,7 +98,6 @@ public class SqlQueryManager
     private final ResourceGroupManager<?> resourceGroupManager;
     private final ClusterMemoryManager memoryManager;
 
-    private final Optional<String> path;
     private final int maxQueryLength;
     private final Duration maxQueryCpuTime;
 
@@ -172,7 +171,6 @@ public class SqlQueryManager
 
         this.clusterSizeMonitor = requireNonNull(clusterSizeMonitor, "clusterSizeMonitor is null");
 
-        this.path = sqlEnvironmentConfig.getPath();
         this.maxQueryLength = queryManagerConfig.getMaxQueryLength();
         this.maxQueryCpuTime = queryManagerConfig.getQueryMaxCpuTime();
 
@@ -321,7 +319,6 @@ public class SqlQueryManager
         Session session = null;
         SelectionContext<C> selectionContext = null;
         QueryExecution queryExecution;
-        PreparedQuery preparedQuery;
         try {
             clusterSizeMonitor.verifyInitialMinimumWorkersRequirement();
 
@@ -335,7 +332,7 @@ public class SqlQueryManager
             session = sessionSupplier.createSession(queryId, sessionContext);
 
             // prepare query
-            preparedQuery = queryPreparer.prepareQuery(session, query);
+            PreparedQuery preparedQuery = queryPreparer.prepareQuery(session, query);
 
             // select resource group
             Optional<String> queryType = getQueryType(preparedQuery.getStatement().getClass()).map(Enum::name);
@@ -438,7 +435,7 @@ public class SqlQueryManager
 
         // start the query in the background
         try {
-            resourceGroupManager.submit(preparedQuery.getStatement(), queryExecution, selectionContext, queryExecutor);
+            resourceGroupManager.submit(queryExecution, selectionContext, queryExecutor);
         }
         catch (Throwable e) {
             failQuery(queryId, e);

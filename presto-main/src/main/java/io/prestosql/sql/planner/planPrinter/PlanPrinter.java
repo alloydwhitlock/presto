@@ -25,7 +25,7 @@ import io.airlift.slice.Slice;
 import io.airlift.units.Duration;
 import io.prestosql.Session;
 import io.prestosql.SystemSessionProperties;
-import io.prestosql.cost.PlanNodeCostEstimate;
+import io.prestosql.cost.PlanCostEstimate;
 import io.prestosql.cost.PlanNodeStatsEstimate;
 import io.prestosql.cost.StatsAndCosts;
 import io.prestosql.execution.StageInfo;
@@ -36,7 +36,6 @@ import io.prestosql.metadata.Signature;
 import io.prestosql.metadata.TableHandle;
 import io.prestosql.operator.StageExecutionDescriptor;
 import io.prestosql.spi.connector.ColumnHandle;
-import io.prestosql.spi.connector.ConnectorTableLayoutHandle;
 import io.prestosql.spi.predicate.Domain;
 import io.prestosql.spi.predicate.Marker;
 import io.prestosql.spi.predicate.NullableValue;
@@ -99,6 +98,7 @@ import io.prestosql.sql.planner.plan.UnionNode;
 import io.prestosql.sql.planner.plan.UnnestNode;
 import io.prestosql.sql.planner.plan.ValuesNode;
 import io.prestosql.sql.planner.plan.WindowNode;
+import io.prestosql.sql.planner.planPrinter.NodeRepresentation.TypedSymbol;
 import io.prestosql.sql.tree.ComparisonExpression;
 import io.prestosql.sql.tree.Expression;
 import io.prestosql.sql.tree.FunctionCall;
@@ -758,16 +758,6 @@ public class PlanPrinter
 
         private void printTableScanInfo(NodeRepresentation nodeOutput, TableScanNode node)
         {
-            TableHandle table = node.getTable();
-
-            if (node.getLayout().isPresent()) {
-                // TODO: find a better way to do this
-                ConnectorTableLayoutHandle layout = node.getLayout().get().getConnectorHandle();
-                if (!table.getConnectorHandle().toString().equals(layout.toString())) {
-                    nodeOutput.appendDetailsLine("LAYOUT: %s", layout);
-                }
-            }
-
             TupleDomain<ColumnHandle> predicate = node.getCurrentConstraint();
             if (predicate.isNone()) {
                 nodeOutput.appendDetailsLine(":: NONE");
@@ -1169,8 +1159,8 @@ public class PlanPrinter
             List<PlanNodeStatsEstimate> estimatedStats = allNodes.stream()
                     .map(nodeId -> estimatedStatsAndCosts.getStats().getOrDefault(nodeId, PlanNodeStatsEstimate.unknown()))
                     .collect(toList());
-            List<PlanNodeCostEstimate> estimatedCosts = allNodes.stream()
-                    .map(nodeId -> estimatedStatsAndCosts.getCosts().getOrDefault(nodeId, PlanNodeCostEstimate.unknown()))
+            List<PlanCostEstimate> estimatedCosts = allNodes.stream()
+                    .map(nodeId -> estimatedStatsAndCosts.getCosts().getOrDefault(nodeId, PlanCostEstimate.unknown()))
                     .collect(toList());
 
             NodeRepresentation nodeOutput = new NodeRepresentation(
@@ -1178,7 +1168,9 @@ public class PlanPrinter
                     name,
                     rootNode.getClass().getSimpleName(),
                     identifier,
-                    rootNode.getOutputSymbols(),
+                    rootNode.getOutputSymbols().stream()
+                            .map(s -> new TypedSymbol(s, types.get(s).getDisplayName()))
+                            .collect(toImmutableList()),
                     stats.map(s -> s.get(rootNode.getId())),
                     estimatedStats,
                     estimatedCosts,

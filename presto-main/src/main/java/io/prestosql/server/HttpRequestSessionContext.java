@@ -298,11 +298,16 @@ public final class HttpRequestSessionContext
     private static Map<String, SelectedRole> parseRoleHeaders(HttpServletRequest servletRequest)
     {
         ImmutableMap.Builder<String, SelectedRole> roles = ImmutableMap.builder();
-        for (String header : splitSessionHeader(servletRequest.getHeaders(PRESTO_ROLE))) {
-            List<String> nameValue = Splitter.on('=').limit(2).trimResults().splitToList(header);
-            assertRequest(nameValue.size() == 2, "Invalid %s header", PRESTO_ROLE);
-            roles.put(nameValue.get(0), SelectedRole.valueOf(urlDecode(nameValue.get(1))));
-        }
+        parseProperty(servletRequest, PRESTO_ROLE).forEach((key, value) -> {
+            SelectedRole role;
+            try {
+                role = SelectedRole.valueOf(value);
+            }
+            catch (IllegalArgumentException e) {
+                throw badRequest(format("Invalid %s header", PRESTO_ROLE));
+            }
+            roles.put(key, role);
+        });
         return roles.build();
     }
 
@@ -317,7 +322,12 @@ public final class HttpRequestSessionContext
         for (String header : splitSessionHeader(servletRequest.getHeaders(headerName))) {
             List<String> nameValue = Splitter.on('=').trimResults().splitToList(header);
             assertRequest(nameValue.size() == 2, "Invalid %s header", headerName);
-            properties.put(nameValue.get(0), nameValue.get(1));
+            try {
+                properties.put(nameValue.get(0), urlDecode(nameValue.get(1)));
+            }
+            catch (IllegalArgumentException e) {
+                throw badRequest(format("Invalid %s header: %s", headerName, e));
+            }
         }
         return properties;
     }
@@ -337,12 +347,7 @@ public final class HttpRequestSessionContext
     private ResourceEstimates parseResourceEstimate(HttpServletRequest servletRequest)
     {
         ResourceEstimateBuilder builder = new ResourceEstimateBuilder();
-        for (String header : splitSessionHeader(servletRequest.getHeaders(PRESTO_RESOURCE_ESTIMATE))) {
-            List<String> nameValue = Splitter.on('=').limit(2).trimResults().splitToList(header);
-            assertRequest(nameValue.size() == 2, "Invalid %s header", PRESTO_RESOURCE_ESTIMATE);
-            String name = nameValue.get(0);
-            String value = nameValue.get(1);
-
+        parseProperty(servletRequest, PRESTO_RESOURCE_ESTIMATE).forEach((name, value) -> {
             try {
                 switch (name.toUpperCase()) {
                     case ResourceEstimates.EXECUTION_TIME:
@@ -361,7 +366,7 @@ public final class HttpRequestSessionContext
             catch (IllegalArgumentException e) {
                 throw badRequest(format("Unsupported format for resource estimate '%s': %s", value, e));
             }
-        }
+        });
 
         return builder.build();
     }
@@ -376,15 +381,10 @@ public final class HttpRequestSessionContext
     private static Map<String, String> parsePreparedStatementsHeaders(HttpServletRequest servletRequest)
     {
         ImmutableMap.Builder<String, String> preparedStatements = ImmutableMap.builder();
-        for (String header : splitSessionHeader(servletRequest.getHeaders(PRESTO_PREPARED_STATEMENT))) {
-            List<String> nameValue = Splitter.on('=').limit(2).trimResults().splitToList(header);
-            assertRequest(nameValue.size() == 2, "Invalid %s header", PRESTO_PREPARED_STATEMENT);
-
+        parseProperty(servletRequest, PRESTO_PREPARED_STATEMENT).forEach((key, sqlString) -> {
             String statementName;
-            String sqlString;
             try {
-                statementName = urlDecode(nameValue.get(0));
-                sqlString = urlDecode(nameValue.get(1));
+                statementName = urlDecode(key);
             }
             catch (IllegalArgumentException e) {
                 throw badRequest(format("Invalid %s header: %s", PRESTO_PREPARED_STATEMENT, e.getMessage()));
@@ -400,7 +400,8 @@ public final class HttpRequestSessionContext
             }
 
             preparedStatements.put(statementName, sqlString);
-        }
+        });
+
         return preparedStatements.build();
     }
 

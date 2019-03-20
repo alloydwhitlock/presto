@@ -23,14 +23,15 @@ import io.prestosql.orc.stream.InputStreamSources;
 import io.prestosql.orc.stream.LongInputStream;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
+import io.prestosql.spi.block.RunLengthEncodedBlock;
 import io.prestosql.spi.type.Type;
-import org.joda.time.DateTime;
-import org.joda.time.DateTimeZone;
 import org.openjdk.jol.info.ClassLayout;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.List;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
@@ -50,7 +51,8 @@ public class TimestampStreamReader
     private static final int MILLIS_PER_SECOND = 1000;
 
     private final StreamDescriptor streamDescriptor;
-    private final long baseTimestampInSeconds;
+
+    private long baseTimestampInSeconds;
 
     private int readOffset;
     private int nextBatchSize;
@@ -73,12 +75,11 @@ public class TimestampStreamReader
 
     private boolean rowGroupOpen;
 
-    private LocalMemoryContext systemMemoryContext;
+    private final LocalMemoryContext systemMemoryContext;
 
-    public TimestampStreamReader(StreamDescriptor streamDescriptor, DateTimeZone hiveStorageTimeZone, LocalMemoryContext systemMemoryContext)
+    public TimestampStreamReader(StreamDescriptor streamDescriptor, LocalMemoryContext systemMemoryContext)
     {
         this.streamDescriptor = requireNonNull(streamDescriptor, "stream is null");
-        this.baseTimestampInSeconds = new DateTime(2015, 1, 1, 0, 0, requireNonNull(hiveStorageTimeZone, "hiveStorageTimeZone is null")).getMillis() / MILLIS_PER_SECOND;
         this.systemMemoryContext = requireNonNull(systemMemoryContext, "systemMemoryContext is null");
     }
 
@@ -116,6 +117,14 @@ public class TimestampStreamReader
             }
         }
 
+        if (secondsStream == null && nanosStream == null && presentStream != null) {
+            presentStream.skip(nextBatchSize);
+            Block nullValueBlock = RunLengthEncodedBlock.create(type, null, nextBatchSize);
+            readOffset = 0;
+            nextBatchSize = 0;
+            return nullValueBlock;
+        }
+
         BlockBuilder builder = type.createBlockBuilder(null, nextBatchSize);
 
         if (presentStream == null) {
@@ -131,10 +140,10 @@ public class TimestampStreamReader
             }
         }
         else {
+            verify(secondsStream != null, "Value is not null but seconds stream is not present");
+            verify(nanosStream != null, "Value is not null but nanos stream is not present");
             for (int i = 0; i < nextBatchSize; i++) {
                 if (presentStream.nextBit()) {
-                    verify(secondsStream != null, "Value is not null but seconds stream is not present");
-                    verify(nanosStream != null, "Value is not null but nanos stream is not present");
                     type.writeLong(builder, decodeTimestamp(secondsStream.next(), nanosStream.next(), baseTimestampInSeconds));
                 }
                 else {
@@ -159,8 +168,10 @@ public class TimestampStreamReader
     }
 
     @Override
-    public void startStripe(InputStreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
+    public void startStripe(ZoneId timeZone, InputStreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
     {
+        baseTimestampInSeconds = ZonedDateTime.of(2015, 1, 1, 0, 0, 0, 0, timeZone).toEpochSecond();
+
         presentStreamSource = missingStreamSource(BooleanInputStream.class);
         secondsStreamSource = missingStreamSource(LongInputStream.class);
         nanosStreamSource = missingStreamSource(LongInputStream.class);
@@ -201,7 +212,7 @@ public class TimestampStreamReader
     }
 
     // This comes from the Apache Hive ORC code
-    public static long decodeTimestamp(long seconds, long serializedNanos, long baseTimestampInSeconds)
+    private static long decodeTimestamp(long seconds, long serializedNanos, long baseTimestampInSeconds)
     {
         long millis = (seconds + baseTimestampInSeconds) * MILLIS_PER_SECOND;
         long nanos = parseNanos(serializedNanos);

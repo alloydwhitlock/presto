@@ -21,13 +21,10 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
-import io.prestosql.connector.ConnectorId;
 import io.prestosql.metadata.FunctionKind;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.MetadataManager;
 import io.prestosql.metadata.Signature;
-import io.prestosql.metadata.TableHandle;
-import io.prestosql.metadata.TableLayoutHandle;
 import io.prestosql.spi.block.SortOrder;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.predicate.Domain;
@@ -57,10 +54,7 @@ import io.prestosql.sql.tree.GenericLiteral;
 import io.prestosql.sql.tree.IsNullPredicate;
 import io.prestosql.sql.tree.LongLiteral;
 import io.prestosql.sql.tree.QualifiedName;
-import io.prestosql.testing.TestingHandle;
 import io.prestosql.testing.TestingMetadata.TestingColumnHandle;
-import io.prestosql.testing.TestingMetadata.TestingTableHandle;
-import io.prestosql.testing.TestingTransactionHandle;
 import io.prestosql.type.UnknownType;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -84,17 +78,12 @@ import static io.prestosql.sql.planner.plan.AggregationNode.globalAggregation;
 import static io.prestosql.sql.planner.plan.AggregationNode.singleGroupingSet;
 import static io.prestosql.sql.tree.BooleanLiteral.FALSE_LITERAL;
 import static io.prestosql.sql.tree.BooleanLiteral.TRUE_LITERAL;
+import static io.prestosql.testing.TestingHandles.TEST_TABLE_HANDLE;
 import static org.testng.Assert.assertEquals;
 
 @Test(singleThreaded = true)
 public class TestEffectivePredicateExtractor
 {
-    private static final TableHandle DUAL_TABLE_HANDLE = new TableHandle(new ConnectorId("test"), new TestingTableHandle());
-    private static final TableLayoutHandle TESTING_TABLE_LAYOUT = new TableLayoutHandle(
-            new ConnectorId("x"),
-            TestingTransactionHandle.create(),
-            TestingHandle.INSTANCE);
-
     private static final Symbol A = new Symbol("a");
     private static final Symbol B = new Symbol("b");
     private static final Symbol C = new Symbol("c");
@@ -130,9 +119,9 @@ public class TestEffectivePredicateExtractor
                 .build();
 
         Map<Symbol, ColumnHandle> assignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(A, B, C, D, E, F)));
-        baseTableScan = new TableScanNode(
+        baseTableScan = TableScanNode.newInstance(
                 newId(),
-                DUAL_TABLE_HANDLE,
+                TEST_TABLE_HANDLE,
                 ImmutableList.copyOf(assignments.keySet()),
                 assignments);
 
@@ -323,9 +312,9 @@ public class TestEffectivePredicateExtractor
     {
         // Effective predicate is True if there is no effective predicate
         Map<Symbol, ColumnHandle> assignments = Maps.filterKeys(scanAssignments, Predicates.in(ImmutableList.of(A, B, C, D)));
-        PlanNode node = new TableScanNode(
+        PlanNode node = TableScanNode.newInstance(
                 newId(),
-                DUAL_TABLE_HANDLE,
+                TEST_TABLE_HANDLE,
                 ImmutableList.copyOf(assignments.keySet()),
                 assignments);
         Expression effectivePredicate = effectivePredicateExtractor.extract(node);
@@ -333,10 +322,9 @@ public class TestEffectivePredicateExtractor
 
         node = new TableScanNode(
                 newId(),
-                DUAL_TABLE_HANDLE,
+                TEST_TABLE_HANDLE,
                 ImmutableList.copyOf(assignments.keySet()),
                 assignments,
-                Optional.of(TESTING_TABLE_LAYOUT),
                 TupleDomain.none(),
                 TupleDomain.all());
         effectivePredicate = effectivePredicateExtractor.extract(node);
@@ -344,10 +332,9 @@ public class TestEffectivePredicateExtractor
 
         node = new TableScanNode(
                 newId(),
-                DUAL_TABLE_HANDLE,
+                TEST_TABLE_HANDLE,
                 ImmutableList.copyOf(assignments.keySet()),
                 assignments,
-                Optional.of(TESTING_TABLE_LAYOUT),
                 TupleDomain.withColumnDomains(ImmutableMap.of(scanAssignments.get(A), Domain.singleValue(BIGINT, 1L))),
                 TupleDomain.all());
         effectivePredicate = effectivePredicateExtractor.extract(node);
@@ -355,10 +342,9 @@ public class TestEffectivePredicateExtractor
 
         node = new TableScanNode(
                 newId(),
-                DUAL_TABLE_HANDLE,
+                TEST_TABLE_HANDLE,
                 ImmutableList.copyOf(assignments.keySet()),
                 assignments,
-                Optional.of(TESTING_TABLE_LAYOUT),
                 TupleDomain.withColumnDomains(ImmutableMap.of(
                         scanAssignments.get(A), Domain.singleValue(BIGINT, 1L),
                         scanAssignments.get(B), Domain.singleValue(BIGINT, 2L))),
@@ -368,10 +354,9 @@ public class TestEffectivePredicateExtractor
 
         node = new TableScanNode(
                 newId(),
-                DUAL_TABLE_HANDLE,
+                TEST_TABLE_HANDLE,
                 ImmutableList.copyOf(assignments.keySet()),
                 assignments,
-                Optional.empty(),
                 TupleDomain.all(),
                 TupleDomain.all());
         effectivePredicate = effectivePredicateExtractor.extract(node);
@@ -433,6 +418,7 @@ public class TestEffectivePredicateExtractor
                 Optional.of(lessThanOrEqual(BE, EE)),
                 Optional.empty(),
                 Optional.empty(),
+                Optional.empty(),
                 Optional.empty());
 
         Expression effectivePredicate = effectivePredicateExtractor.extract(node);
@@ -471,6 +457,7 @@ public class TestEffectivePredicateExtractor
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
+                Optional.empty(),
                 Optional.empty());
 
         Expression effectivePredicate = effectivePredicateExtractor.extract(node);
@@ -499,6 +486,7 @@ public class TestEffectivePredicateExtractor
                         .addAll(rightScan.getOutputSymbols())
                         .build(),
                 Optional.of(FALSE_LITERAL),
+                Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty());
@@ -543,6 +531,7 @@ public class TestEffectivePredicateExtractor
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
+                Optional.empty(),
                 Optional.empty());
 
         Expression effectivePredicate = effectivePredicateExtractor.extract(node);
@@ -583,6 +572,7 @@ public class TestEffectivePredicateExtractor
                         .addAll(left.getOutputSymbols())
                         .addAll(right.getOutputSymbols())
                         .build(),
+                Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
@@ -632,6 +622,7 @@ public class TestEffectivePredicateExtractor
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
+                Optional.empty(),
                 Optional.empty());
 
         Expression effectivePredicate = effectivePredicateExtractor.extract(node);
@@ -674,6 +665,7 @@ public class TestEffectivePredicateExtractor
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
+                Optional.empty(),
                 Optional.empty());
 
         Expression effectivePredicate = effectivePredicateExtractor.extract(node);
@@ -707,10 +699,9 @@ public class TestEffectivePredicateExtractor
     {
         return new TableScanNode(
                 newId(),
-                DUAL_TABLE_HANDLE,
+                TEST_TABLE_HANDLE,
                 ImmutableList.copyOf(scanAssignments.keySet()),
                 scanAssignments,
-                Optional.empty(),
                 TupleDomain.all(),
                 TupleDomain.all());
     }

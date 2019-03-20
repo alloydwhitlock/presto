@@ -41,8 +41,6 @@ import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
 import static io.prestosql.spi.type.IntegerType.INTEGER;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
-import static io.prestosql.sql.analyzer.FeaturesConfig.JoinDistributionType.BROADCAST;
-import static io.prestosql.sql.analyzer.FeaturesConfig.JoinDistributionType.PARTITIONED;
 import static io.prestosql.sql.analyzer.FeaturesConfig.JoinReorderingStrategy.ELIMINATE_CROSS_JOINS;
 import static io.prestosql.sql.analyzer.FeaturesConfig.JoinReorderingStrategy.NONE;
 import static java.lang.Math.min;
@@ -55,7 +53,6 @@ public final class SystemSessionProperties
     public static final String OPTIMIZE_HASH_GENERATION = "optimize_hash_generation";
     public static final String JOIN_DISTRIBUTION_TYPE = "join_distribution_type";
     public static final String JOIN_MAX_BROADCAST_TABLE_SIZE = "join_max_broadcast_table_size";
-    public static final String DISTRIBUTED_JOIN = "distributed_join";
     public static final String DISTRIBUTED_INDEX_JOIN = "distributed_index_join";
     public static final String HASH_PARTITION_COUNT = "hash_partition_count";
     public static final String GROUPED_EXECUTION = "grouped_execution";
@@ -91,9 +88,10 @@ public final class SystemSessionProperties
     public static final String FAST_INEQUALITY_JOINS = "fast_inequality_joins";
     public static final String QUERY_PRIORITY = "query_priority";
     public static final String SPILL_ENABLED = "spill_enabled";
+    public static final String SPILL_ORDER_BY = "spill_order_by";
+    public static final String SPILL_WINDOW_OPERATOR = "spill_window_operator";
     public static final String AGGREGATION_OPERATOR_UNSPILL_MEMORY_LIMIT = "aggregation_operator_unspill_memory_limit";
     public static final String OPTIMIZE_DISTINCT_AGGREGATIONS = "optimize_mixed_distinct_aggregations";
-    public static final String LEGACY_ROW_FIELD_ORDINAL_ACCESS = "legacy_row_field_ordinal_access";
     public static final String ITERATIVE_OPTIMIZER = "iterative_optimizer_enabled";
     public static final String ITERATIVE_OPTIMIZER_TIMEOUT = "iterative_optimizer_timeout";
     public static final String ENABLE_FORCED_EXCHANGE_BELOW_GROUP_ID = "enable_forced_exchange_below_group_id";
@@ -111,7 +109,6 @@ public final class SystemSessionProperties
     public static final String PREFER_PARTIAL_AGGREGATION = "prefer_partial_aggregation";
     public static final String OPTIMIZE_TOP_N_ROW_NUMBER = "optimize_top_n_row_number";
     public static final String MAX_GROUPING_SETS = "max_grouping_sets";
-    public static final String LEGACY_UNNEST = "legacy_unnest";
     public static final String STATISTICS_CPU_TIMER_ENABLED = "statistics_cpu_timer_enabled";
     public static final String ENABLE_STATS_CALCULATOR = "enable_stats_calculator";
     public static final String IGNORE_STATS_CALCULATOR_FAILURES = "ignore_stats_calculator_failures";
@@ -143,11 +140,6 @@ public final class SystemSessionProperties
                         "Compute hash codes for distribution, joins, and aggregations early in query plan",
                         featuresConfig.isOptimizeHashGeneration(),
                         false),
-                booleanProperty(
-                        DISTRIBUTED_JOIN,
-                        "(DEPRECATED) Use a distributed join instead of a broadcast join. If this is set, join_distribution_type is ignored.",
-                        null,
-                        false),
                 new PropertyMetadata<>(
                         JOIN_DISTRIBUTION_TYPE,
                         format("The join method to use. Options are %s",
@@ -162,11 +154,11 @@ public final class SystemSessionProperties
                         JoinDistributionType::name),
                 new PropertyMetadata<>(
                         JOIN_MAX_BROADCAST_TABLE_SIZE,
-                        "Maximum estimated size of a table that can be broadcast for JOIN.",
+                        "Maximum estimated size of a table that can be broadcast when using automatic join type selection",
                         VARCHAR,
                         DataSize.class,
                         featuresConfig.getJoinMaxBroadcastTableSize(),
-                        true,
+                        false,
                         value -> DataSize.valueOf((String) value),
                         DataSize::toString),
                 booleanProperty(
@@ -404,6 +396,16 @@ public final class SystemSessionProperties
                             return spillEnabled;
                         },
                         value -> value),
+                booleanProperty(
+                        SPILL_ORDER_BY,
+                        "Spill in OrderBy if spill_enabled is also set",
+                        featuresConfig.isSpillOrderBy(),
+                        false),
+                booleanProperty(
+                        SPILL_WINDOW_OPERATOR,
+                        "Spill in WindowOperator if spill_enabled is also set",
+                        featuresConfig.isSpillWindowOperator(),
+                        false),
                 new PropertyMetadata<>(
                         AGGREGATION_OPERATOR_UNSPILL_MEMORY_LIMIT,
                         "Experimental: How much memory can should be allocated per aggragation operator in unspilling process",
@@ -417,11 +419,6 @@ public final class SystemSessionProperties
                         OPTIMIZE_DISTINCT_AGGREGATIONS,
                         "Optimize mixed non-distinct and distinct aggregations",
                         featuresConfig.isOptimizeMixedDistinctAggregations(),
-                        false),
-                booleanProperty(
-                        LEGACY_ROW_FIELD_ORDINAL_ACCESS,
-                        "Allow accessing anonymous row field with .field0, .field1, ...",
-                        featuresConfig.isLegacyRowFieldOrdinalAccess(),
                         false),
                 booleanProperty(
                         ITERATIVE_OPTIMIZER,
@@ -517,11 +514,6 @@ public final class SystemSessionProperties
                         featuresConfig.getMaxGroupingSets(),
                         true),
                 booleanProperty(
-                        LEGACY_UNNEST,
-                        "Using legacy unnest semantic, where unnest(array(row)) will create one column of type row",
-                        featuresConfig.isLegacyUnnestArrayRows(),
-                        false),
-                booleanProperty(
                         STATISTICS_CPU_TIMER_ENABLED,
                         "Experimental: Enable cpu time tracking for automatic column statistics collection on write",
                         taskManagerConfig.isStatisticsCpuTimerEnabled(),
@@ -569,15 +561,6 @@ public final class SystemSessionProperties
 
     public static JoinDistributionType getJoinDistributionType(Session session)
     {
-        // distributed_join takes precedence until we remove it
-        Boolean distributedJoin = session.getSystemProperty(DISTRIBUTED_JOIN, Boolean.class);
-        if (distributedJoin != null) {
-            if (!distributedJoin) {
-                return BROADCAST;
-            }
-            return PARTITIONED;
-        }
-
         return session.getSystemProperty(JOIN_DISTRIBUTION_TYPE, JoinDistributionType.class);
     }
 
@@ -767,6 +750,16 @@ public final class SystemSessionProperties
         return session.getSystemProperty(SPILL_ENABLED, Boolean.class);
     }
 
+    public static boolean isSpillOrderBy(Session session)
+    {
+        return session.getSystemProperty(SPILL_ORDER_BY, Boolean.class);
+    }
+
+    public static boolean isSpillWindowOperator(Session session)
+    {
+        return session.getSystemProperty(SPILL_WINDOW_OPERATOR, Boolean.class);
+    }
+
     public static DataSize getAggregationOperatorUnspillMemoryLimit(Session session)
     {
         DataSize memoryLimitForMerge = session.getSystemProperty(AGGREGATION_OPERATOR_UNSPILL_MEMORY_LIMIT, DataSize.class);
@@ -779,17 +772,11 @@ public final class SystemSessionProperties
         return session.getSystemProperty(OPTIMIZE_DISTINCT_AGGREGATIONS, Boolean.class);
     }
 
-    public static boolean isLegacyRowFieldOrdinalAccessEnabled(Session session)
-    {
-        return session.getSystemProperty(LEGACY_ROW_FIELD_ORDINAL_ACCESS, Boolean.class);
-    }
-
     public static boolean isNewOptimizerEnabled(Session session)
     {
         return session.getSystemProperty(ITERATIVE_OPTIMIZER, Boolean.class);
     }
 
-    @Deprecated
     public static boolean isLegacyTimestamp(Session session)
     {
         return session.getSystemProperty(LEGACY_TIMESTAMP, Boolean.class);
@@ -868,11 +855,6 @@ public final class SystemSessionProperties
     public static int getMaxGroupingSets(Session session)
     {
         return session.getSystemProperty(MAX_GROUPING_SETS, Integer.class);
-    }
-
-    public static boolean isLegacyUnnest(Session session)
-    {
-        return session.getSystemProperty(LEGACY_UNNEST, Boolean.class);
     }
 
     public static OptionalInt getMaxDriversPerTask(Session session)

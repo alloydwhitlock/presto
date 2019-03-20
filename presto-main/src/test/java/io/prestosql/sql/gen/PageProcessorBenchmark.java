@@ -17,7 +17,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.prestosql.SequencePageBuilder;
 import io.prestosql.Session;
-import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.MetadataManager;
 import io.prestosql.operator.DriverYieldSignal;
@@ -30,7 +29,7 @@ import io.prestosql.spi.connector.RecordSet;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.parser.SqlParser;
 import io.prestosql.sql.planner.Symbol;
-import io.prestosql.sql.planner.SymbolToInputRewriter;
+import io.prestosql.sql.planner.TypeAnalyzer;
 import io.prestosql.sql.planner.TypeProvider;
 import io.prestosql.sql.relational.RowExpression;
 import io.prestosql.sql.relational.SqlToRowExpressionTranslator;
@@ -66,8 +65,6 @@ import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
 import static io.prestosql.operator.scalar.FunctionAssertions.createExpression;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
-import static io.prestosql.sql.analyzer.ExpressionAnalyzer.getExpressionTypesFromInput;
-import static java.util.Collections.emptyList;
 import static java.util.Locale.ENGLISH;
 import static java.util.stream.Collectors.toList;
 
@@ -81,8 +78,8 @@ import static java.util.stream.Collectors.toList;
 public class PageProcessorBenchmark
 {
     private static final Map<String, Type> TYPE_MAP = ImmutableMap.of("bigint", BIGINT, "varchar", VARCHAR);
-    private static final SqlParser SQL_PARSER = new SqlParser();
     private static final Metadata METADATA = createTestMetadataManager();
+    private static final TypeAnalyzer TYPE_ANALYZER = new TypeAnalyzer(new SqlParser(), METADATA);
     private static final Session TEST_SESSION = TestingSession.testSessionBuilder().build();
     private static final int POSITIONS = 1024;
 
@@ -151,10 +148,10 @@ public class PageProcessorBenchmark
     private RowExpression getFilter(Type type)
     {
         if (type == VARCHAR) {
-            return rowExpression("cast(varchar0 as bigint) % 2 = 0", VARCHAR);
+            return rowExpression("cast(varchar0 as bigint) % 2 = 0");
         }
         if (type == BIGINT) {
-            return rowExpression("bigint0 % 2 = 0", BIGINT);
+            return rowExpression("bigint0 % 2 = 0");
         }
         throw new IllegalArgumentException("filter not supported for type : " + type);
     }
@@ -164,32 +161,25 @@ public class PageProcessorBenchmark
         ImmutableList.Builder<RowExpression> builder = ImmutableList.builder();
         if (type == BIGINT) {
             for (int i = 0; i < columnCount; i++) {
-                builder.add(rowExpression("bigint" + i + " + 5", type));
+                builder.add(rowExpression("bigint" + i + " + 5"));
             }
         }
         else if (type == VARCHAR) {
             for (int i = 0; i < columnCount; i++) {
                 // alternatively use identity expression rowExpression("varchar" + i, type) or
                 // rowExpression("substr(varchar" + i + ", 1, 1)", type)
-                builder.add(rowExpression("concat(varchar" + i + ", 'foo')", type));
+                builder.add(rowExpression("concat(varchar" + i + ", 'foo')"));
             }
         }
         return builder.build();
     }
 
-    private RowExpression rowExpression(String expression, Type type)
+    private RowExpression rowExpression(String value)
     {
-        SymbolToInputRewriter symbolToInputRewriter = new SymbolToInputRewriter(sourceLayout);
-        Expression inputReferenceExpression = symbolToInputRewriter.rewrite(createExpression(expression, METADATA, TypeProvider.copyOf(symbolTypes)));
+        Expression expression = createExpression(value, METADATA, TypeProvider.copyOf(symbolTypes));
 
-        ImmutableMap.Builder<Integer, Type> builder = ImmutableMap.builder();
-        for (int i = 0; i < columnCount; i++) {
-            builder.put(i, type);
-        }
-        Map<Integer, Type> types = builder.build();
-
-        Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypesFromInput(TEST_SESSION, METADATA, SQL_PARSER, types, inputReferenceExpression, emptyList(), WarningCollector.NOOP);
-        return SqlToRowExpressionTranslator.translate(inputReferenceExpression, SCALAR, expressionTypes, METADATA.getFunctionRegistry(), METADATA.getTypeManager(), TEST_SESSION, true);
+        Map<NodeRef<Expression>, Type> expressionTypes = TYPE_ANALYZER.getTypes(TEST_SESSION, TypeProvider.copyOf(symbolTypes), expression);
+        return SqlToRowExpressionTranslator.translate(expression, SCALAR, expressionTypes, sourceLayout, METADATA.getFunctionRegistry(), METADATA.getTypeManager(), TEST_SESSION, true);
     }
 
     private static Page createPage(List<? extends Type> types, boolean dictionary)

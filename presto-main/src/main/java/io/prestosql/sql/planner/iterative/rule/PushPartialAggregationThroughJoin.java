@@ -93,7 +93,7 @@ public class PushPartialAggregationThroughJoin
         if (allAggregationsOn(aggregationNode.getAggregations(), joinNode.getLeft().getOutputSymbols())) {
             return Result.ofPlanNode(pushPartialToLeftChild(aggregationNode, joinNode, context));
         }
-        else if (allAggregationsOn(aggregationNode.getAggregations(), joinNode.getRight().getOutputSymbols())) {
+        if (allAggregationsOn(aggregationNode.getAggregations(), joinNode.getRight().getOutputSymbols())) {
             return Result.ofPlanNode(pushPartialToRightChild(aggregationNode, joinNode, context));
         }
 
@@ -187,7 +187,8 @@ public class PushPartialAggregationThroughJoin
                 child.getFilter(),
                 child.getLeftHashSymbol(),
                 child.getRightHashSymbol(),
-                child.getDistributionType());
+                child.getDistributionType(),
+                child.isSpillable());
         return restrictOutputs(context.getIdAllocator(), joinNode, ImmutableSet.copyOf(aggregation.getOutputSymbols())).orElse(joinNode);
     }
 }

@@ -19,6 +19,7 @@ import io.prestosql.spi.connector.ConnectorPageSource;
 import io.prestosql.spi.connector.ConnectorPageSourceProvider;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorSplit;
+import io.prestosql.spi.connector.ConnectorTableHandle;
 import io.prestosql.spi.connector.ConnectorTransactionHandle;
 import io.prestosql.spi.connector.FixedPageSource;
 
@@ -42,13 +43,14 @@ public final class MemoryPageSourceProvider
 
     @Override
     public ConnectorPageSource createPageSource(
-            ConnectorTransactionHandle transactionHandle,
+            ConnectorTransactionHandle transaction,
             ConnectorSession session,
             ConnectorSplit split,
+            ConnectorTableHandle table,
             List<ColumnHandle> columns)
     {
         MemorySplit memorySplit = (MemorySplit) split;
-        long tableId = memorySplit.getTableHandle().getTableId();
+        long tableId = memorySplit.getTable();
         int partNumber = memorySplit.getPartNumber();
         int totalParts = memorySplit.getTotalPartsPerWorker();
         long expectedRows = memorySplit.getExpectedRows();
@@ -61,7 +63,8 @@ public final class MemoryPageSourceProvider
                 partNumber,
                 totalParts,
                 columnIndexes,
-                expectedRows);
+                expectedRows,
+                memorySplit.getLimit());
 
         return new FixedPageSource(pages);
     }

@@ -16,9 +16,9 @@ package io.prestosql.plugin.redshift;
 import io.prestosql.plugin.jdbc.BaseJdbcClient;
 import io.prestosql.plugin.jdbc.BaseJdbcConfig;
 import io.prestosql.plugin.jdbc.DriverConnectionFactory;
-import io.prestosql.plugin.jdbc.JdbcConnectorId;
-import io.prestosql.plugin.jdbc.JdbcOutputTableHandle;
+import io.prestosql.plugin.jdbc.JdbcIdentity;
 import io.prestosql.spi.PrestoException;
+import io.prestosql.spi.connector.SchemaTableName;
 import org.postgresql.Driver;
 
 import javax.inject.Inject;
@@ -28,27 +28,31 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 
 import static io.prestosql.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
+import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
 import static java.lang.String.format;
 
 public class RedshiftClient
         extends BaseJdbcClient
 {
     @Inject
-    public RedshiftClient(JdbcConnectorId connectorId, BaseJdbcConfig config)
+    public RedshiftClient(BaseJdbcConfig config)
     {
-        super(connectorId, config, "\"", new DriverConnectionFactory(new Driver(), config));
+        super(config, "\"", new DriverConnectionFactory(new Driver(), config));
     }
 
     @Override
-    public void commitCreateTable(JdbcOutputTableHandle handle)
+    protected void renameTable(JdbcIdentity identity, String catalogName, String schemaName, String tableName, SchemaTableName newTable)
     {
-        // Redshift does not allow qualifying the target of a rename
+        if (!schemaName.equals(newTable.getSchemaName())) {
+            throw new PrestoException(NOT_SUPPORTED, "Table rename across schemas is not supported in Redshift");
+        }
+
         String sql = format(
                 "ALTER TABLE %s RENAME TO %s",
-                quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTemporaryTableName()),
-                quoted(handle.getTableName()));
+                quoted(catalogName, schemaName, tableName),
+                quoted(newTable.getTableName()));
 
-        try (Connection connection = getConnection(handle)) {
+        try (Connection connection = connectionFactory.openConnection(identity)) {
             execute(connection, sql);
         }
         catch (SQLException e) {

@@ -20,9 +20,11 @@ import io.prestosql.spi.block.BlockEncodingSerde;
 import io.prestosql.spi.connector.CatalogSchemaName;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
+import io.prestosql.spi.connector.ConnectorCapabilities;
 import io.prestosql.spi.connector.ConnectorOutputMetadata;
 import io.prestosql.spi.connector.ConnectorTableMetadata;
 import io.prestosql.spi.connector.Constraint;
+import io.prestosql.spi.connector.LimitApplicationResult;
 import io.prestosql.spi.connector.SystemTable;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.security.GrantInfo;
@@ -114,19 +116,19 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
-    public List<TableLayoutResult> getLayouts(Session session, TableHandle tableHandle, Constraint<ColumnHandle> constraint, Optional<Set<ColumnHandle>> desiredColumns)
+    public Optional<TableLayoutResult> getLayout(Session session, TableHandle tableHandle, Constraint<ColumnHandle> constraint, Optional<Set<ColumnHandle>> desiredColumns)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public TableLayout getLayout(Session session, TableLayoutHandle handle)
+    public TableProperties getTableProperties(Session session, TableHandle handle)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public TableLayoutHandle getAlternativeLayoutHandle(Session session, TableLayoutHandle tableLayoutHandle, PartitioningHandle partitioningHandle)
+    public TableHandle makeCompatiblePartitioning(Session session, TableHandle table, PartitioningHandle partitioningHandle)
     {
         throw new UnsupportedOperationException();
     }
@@ -138,7 +140,7 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
-    public Optional<Object> getInfo(Session session, TableLayoutHandle handle)
+    public Optional<Object> getInfo(Session session, TableHandle handle)
     {
         throw new UnsupportedOperationException();
     }
@@ -306,13 +308,13 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
-    public boolean supportsMetadataDelete(Session session, TableHandle tableHandle, TableLayoutHandle tableLayoutHandle)
+    public boolean supportsMetadataDelete(Session session, TableHandle tableHandle)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public OptionalLong metadataDelete(Session session, TableHandle tableHandle, TableLayoutHandle tableLayoutHandle)
+    public OptionalLong metadataDelete(Session session, TableHandle tableHandle)
     {
         throw new UnsupportedOperationException();
     }
@@ -507,5 +509,23 @@ public abstract class AbstractMockMetadata
     public boolean catalogExists(Session session, String catalogName)
     {
         throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Set<ConnectorCapabilities> getConnectorCapabilities(Session session, ConnectorId catalogName)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean usesLegacyTableLayouts(Session session, TableHandle table)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Optional<LimitApplicationResult<TableHandle>> applyLimit(Session session, TableHandle table, long limit)
+    {
+        return Optional.empty();
     }
 }

@@ -45,8 +45,14 @@ public final class LocalMemoryManager
     @Inject
     public LocalMemoryManager(NodeMemoryConfig config)
     {
+        this(config, Runtime.getRuntime().maxMemory());
+    }
+
+    @VisibleForTesting
+    LocalMemoryManager(NodeMemoryConfig config, long availableMemory)
+    {
         requireNonNull(config, "config is null");
-        configureMemoryPools(config, Runtime.getRuntime().maxMemory());
+        configureMemoryPools(config, availableMemory);
     }
 
     private void configureMemoryPools(NodeMemoryConfig config, long availableMemory)
@@ -69,8 +75,7 @@ public final class LocalMemoryManager
         this.pools = builder.build();
     }
 
-    @VisibleForTesting
-    static void validateHeapHeadroom(NodeMemoryConfig config, long availableMemory)
+    private void validateHeapHeadroom(NodeMemoryConfig config, long availableMemory)
     {
         long maxQueryTotalMemoryPerNode = config.getMaxQueryTotalMemoryPerNode().toBytes();
         long heapHeadroom = config.getHeapHeadroom().toBytes();

@@ -25,6 +25,7 @@ import io.prestosql.orc.stream.InputStreamSources;
 import io.prestosql.orc.stream.LongInputStream;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
+import io.prestosql.spi.block.RunLengthEncodedBlock;
 import io.prestosql.spi.type.DecimalType;
 import io.prestosql.spi.type.Decimals;
 import io.prestosql.spi.type.Type;
@@ -34,6 +35,7 @@ import org.openjdk.jol.info.ClassLayout;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.time.ZoneId;
 import java.util.List;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
@@ -73,7 +75,7 @@ public class DecimalStreamReader
 
     private boolean rowGroupOpen;
 
-    private LocalMemoryContext systemMemoryContext;
+    private final LocalMemoryContext systemMemoryContext;
 
     public DecimalStreamReader(StreamDescriptor streamDescriptor, LocalMemoryContext systemMemoryContext)
     {
@@ -100,6 +102,14 @@ public class DecimalStreamReader
         }
 
         seekToOffset();
+
+        if (decimalStream == null && scaleStream == null && presentStream != null) {
+            presentStream.skip(nextBatchSize);
+            Block nullValueBlock = RunLengthEncodedBlock.create(type, null, nextBatchSize);
+            readOffset = 0;
+            nextBatchSize = 0;
+            return nullValueBlock;
+        }
 
         BlockBuilder builder = decimalType.createBlockBuilder(null, nextBatchSize);
 
@@ -128,11 +138,11 @@ public class DecimalStreamReader
             }
         }
         else {
+            verify(decimalStream != null);
+            verify(scaleStream != null);
             for (int i = 0; i < nextBatchSize; i++) {
                 if (presentStream.nextBit()) {
                     // The current row is not null
-                    verify(decimalStream != null);
-                    verify(scaleStream != null);
                     long sourceScale = scaleStream.next();
                     if (decimalType.isShort()) {
                         long rescaledDecimal = Decimals.rescale(decimalStream.nextLong(), (int) sourceScale, decimalType.getScale());
@@ -192,7 +202,7 @@ public class DecimalStreamReader
     }
 
     @Override
-    public void startStripe(InputStreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
+    public void startStripe(ZoneId timeZone, InputStreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
     {
         presentStreamSource = missingStreamSource(BooleanInputStream.class);
         decimalStreamSource = missingStreamSource(DecimalInputStream.class);

@@ -60,11 +60,13 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Strings.padEnd;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Lists.newArrayList;
+import static io.airlift.slice.Slices.utf8Slice;
 import static io.airlift.tpch.TpchTable.LINE_ITEM;
 import static io.airlift.tpch.TpchTable.NATION;
 import static io.airlift.tpch.TpchTable.ORDERS;
 import static io.airlift.tpch.TpchTable.PART;
 import static io.airlift.tpch.TpchTable.REGION;
+import static io.prestosql.operator.scalar.JsonFunctions.jsonParse;
 import static io.prestosql.plugin.tpch.TpchMetadata.TINY_SCHEMA_NAME;
 import static io.prestosql.plugin.tpch.TpchRecordSet.createTpchRecordSet;
 import static io.prestosql.spi.type.BigintType.BIGINT;
@@ -81,6 +83,7 @@ import static io.prestosql.spi.type.TimestampType.TIMESTAMP;
 import static io.prestosql.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static io.prestosql.spi.type.TinyintType.TINYINT;
 import static io.prestosql.spi.type.Varchars.isVarcharType;
+import static io.prestosql.type.JsonType.JSON;
 import static io.prestosql.type.UnknownType.UNKNOWN;
 import static java.lang.String.format;
 import static java.util.Collections.nCopies;
@@ -193,7 +196,7 @@ public class H2QueryRunner
                     throws SQLException
             {
                 int count = resultSet.getMetaData().getColumnCount();
-                checkArgument(types.size() == count, "type does not match result");
+                checkArgument(types.size() == count, "expected types count (%s) does not match actual column count (%s)", types.size(), count);
                 List<Object> row = new ArrayList<>(count);
                 for (int i = 1; i <= count; i++) {
                     Type type = types.get(i - 1);
@@ -258,6 +261,15 @@ public class H2QueryRunner
                         }
                         else {
                             row.add(doubleValue);
+                        }
+                    }
+                    else if (JSON.equals(type)) {
+                        String stringValue = resultSet.getString(i);
+                        if (resultSet.wasNull()) {
+                            row.add(null);
+                        }
+                        else {
+                            row.add(jsonParse(utf8Slice(stringValue)).toStringUtf8());
                         }
                     }
                     else if (isVarcharType(type)) {

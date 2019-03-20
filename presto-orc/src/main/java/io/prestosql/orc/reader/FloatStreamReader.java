@@ -22,22 +22,21 @@ import io.prestosql.orc.stream.FloatInputStream;
 import io.prestosql.orc.stream.InputStreamSource;
 import io.prestosql.orc.stream.InputStreamSources;
 import io.prestosql.spi.block.Block;
-import io.prestosql.spi.block.BlockBuilder;
+import io.prestosql.spi.block.RunLengthEncodedBlock;
 import io.prestosql.spi.type.Type;
 import org.openjdk.jol.info.ClassLayout;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.time.ZoneId;
 import java.util.List;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Verify.verify;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static io.prestosql.orc.metadata.Stream.StreamKind.DATA;
 import static io.prestosql.orc.metadata.Stream.StreamKind.PRESENT;
 import static io.prestosql.orc.stream.MissingInputStreamSource.missingStreamSource;
-import static java.lang.Float.floatToRawIntBits;
 import static java.util.Objects.requireNonNull;
 
 public class FloatStreamReader
@@ -61,7 +60,7 @@ public class FloatStreamReader
 
     private boolean rowGroupOpen;
 
-    private LocalMemoryContext systemMemoryContext;
+    private final LocalMemoryContext systemMemoryContext;
 
     public FloatStreamReader(StreamDescriptor streamDescriptor, LocalMemoryContext systemMemoryContext)
     {
@@ -98,29 +97,39 @@ public class FloatStreamReader
             }
         }
 
-        BlockBuilder builder = type.createBlockBuilder(null, nextBatchSize);
-        if (presentStream == null) {
-            if (dataStream == null) {
+        if (dataStream == null) {
+            if (presentStream == null) {
                 throw new OrcCorruptionException(streamDescriptor.getOrcDataSourceId(), "Value is not null but data stream is not present");
             }
-            dataStream.nextVector(type, nextBatchSize, builder);
+            presentStream.skip(nextBatchSize);
+            Block nullValueBlock = RunLengthEncodedBlock.create(type, null, nextBatchSize);
+            readOffset = 0;
+            nextBatchSize = 0;
+            return nullValueBlock;
+        }
+
+        Block block;
+        if (presentStream == null) {
+            block = dataStream.nextBlock(type, nextBatchSize);
         }
         else {
-            for (int i = 0; i < nextBatchSize; i++) {
-                if (presentStream.nextBit()) {
-                    verify(dataStream != null);
-                    type.writeLong(builder, floatToRawIntBits(dataStream.next()));
-                }
-                else {
-                    builder.appendNull();
-                }
+            boolean[] isNull = new boolean[nextBatchSize];
+            int nullCount = presentStream.getUnsetBits(nextBatchSize, isNull);
+            if (nullCount == 0) {
+                block = dataStream.nextBlock(type, nextBatchSize);
+            }
+            else if (nullCount != nextBatchSize) {
+                block = dataStream.nextBlock(type, isNull);
+            }
+            else {
+                block = RunLengthEncodedBlock.create(type, null, nextBatchSize);
             }
         }
 
         readOffset = 0;
         nextBatchSize = 0;
 
-        return builder.build();
+        return block;
     }
 
     private void openRowGroup()
@@ -133,7 +142,7 @@ public class FloatStreamReader
     }
 
     @Override
-    public void startStripe(InputStreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
+    public void startStripe(ZoneId timeZone, InputStreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
     {
         presentStreamSource = missingStreamSource(BooleanInputStream.class);
         dataStreamSource = missingStreamSource(FloatInputStream.class);

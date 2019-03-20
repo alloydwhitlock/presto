@@ -135,6 +135,7 @@ public class LimitPushDown
 
             if (limit != null &&
                     node.getAggregations().isEmpty() &&
+                    !node.getGroupingKeys().isEmpty() &&
                     node.getOutputSymbols().size() == node.getGroupingKeys().size() &&
                     node.getOutputSymbols().containsAll(node.getGroupingKeys())) {
                 PlanNode rewrittenSource = context.rewrite(node.getSource());
@@ -191,7 +192,7 @@ public class LimitPushDown
             if (limit != null) {
                 return new TopNNode(node.getId(), rewrittenSource, limit.getCount(), node.getOrderingScheme(), TopNNode.Step.SINGLE);
             }
-            else if (rewrittenSource != node.getSource()) {
+            if (rewrittenSource != node.getSource()) {
                 return new SortNode(node.getId(), rewrittenSource, node.getOrderingScheme());
             }
             return node;

@@ -14,16 +14,11 @@
 package io.prestosql.sql.planner.optimizations;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import io.prestosql.Session;
 import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.TableHandle;
-import io.prestosql.metadata.TableLayoutResult;
-import io.prestosql.spi.connector.ColumnHandle;
-import io.prestosql.spi.connector.Constraint;
-import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.sql.planner.PlanNodeIdAllocator;
 import io.prestosql.sql.planner.SymbolAllocator;
 import io.prestosql.sql.planner.TypeProvider;
@@ -41,13 +36,10 @@ import io.prestosql.sql.planner.plan.TableScanNode;
 import io.prestosql.sql.planner.plan.TableWriterNode;
 import io.prestosql.sql.planner.plan.UnionNode;
 
-import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.base.Verify.verify;
-import static io.prestosql.metadata.TableLayoutResult.computeEnforced;
 import static io.prestosql.sql.planner.optimizations.QueryCardinalityUtil.isAtMostScalar;
 import static io.prestosql.sql.planner.plan.ChildReplacer.replaceChildren;
 import static java.util.stream.Collectors.toSet;
@@ -195,24 +187,13 @@ public class BeginTableWrite
         {
             if (node instanceof TableScanNode) {
                 TableScanNode scan = (TableScanNode) node;
-                TupleDomain<ColumnHandle> originalEnforcedConstraint = scan.getEnforcedConstraint();
-
-                List<TableLayoutResult> layouts = metadata.getLayouts(
-                        session,
-                        handle,
-                        new Constraint<>(originalEnforcedConstraint),
-                        Optional.of(ImmutableSet.copyOf(scan.getAssignments().values())));
-                verify(layouts.size() == 1, "Expected exactly one layout for delete");
-                TableLayoutResult layoutResult = Iterables.getOnlyElement(layouts);
-
                 return new TableScanNode(
                         scan.getId(),
                         handle,
                         scan.getOutputSymbols(),
                         scan.getAssignments(),
-                        Optional.of(layoutResult.getLayout().getHandle()),
-                        layoutResult.getLayout().getPredicate(),
-                        computeEnforced(originalEnforcedConstraint, layoutResult.getUnenforcedConstraint()));
+                        scan.getCurrentConstraint(),
+                        scan.getEnforcedConstraint());
             }
 
             if (node instanceof FilterNode) {

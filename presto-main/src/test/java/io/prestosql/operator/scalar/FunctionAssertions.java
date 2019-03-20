@@ -23,11 +23,13 @@ import io.airlift.slice.Slices;
 import io.airlift.units.DataSize;
 import io.prestosql.Session;
 import io.prestosql.connector.ConnectorId;
+import io.prestosql.execution.Lifespan;
 import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.metadata.FunctionListBuilder;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.Split;
 import io.prestosql.metadata.SqlFunction;
+import io.prestosql.metadata.TableHandle;
 import io.prestosql.operator.DriverContext;
 import io.prestosql.operator.DriverYieldSignal;
 import io.prestosql.operator.FilterAndProjectOperator.FilterAndProjectOperatorFactory;
@@ -37,9 +39,6 @@ import io.prestosql.operator.ScanFilterAndProjectOperator;
 import io.prestosql.operator.SourceOperator;
 import io.prestosql.operator.SourceOperatorFactory;
 import io.prestosql.operator.project.CursorProcessor;
-import io.prestosql.operator.project.InterpretedPageFilter;
-import io.prestosql.operator.project.InterpretedPageProjection;
-import io.prestosql.operator.project.PageFilter;
 import io.prestosql.operator.project.PageProcessor;
 import io.prestosql.operator.project.PageProjection;
 import io.prestosql.spi.ErrorCodeSupplier;
@@ -56,6 +55,7 @@ import io.prestosql.spi.connector.FixedPageSource;
 import io.prestosql.spi.connector.InMemoryRecordSet;
 import io.prestosql.spi.connector.RecordPageSource;
 import io.prestosql.spi.connector.RecordSet;
+import io.prestosql.spi.predicate.Utils;
 import io.prestosql.spi.type.TimeZoneKey;
 import io.prestosql.spi.type.Type;
 import io.prestosql.split.PageSourceProvider;
@@ -65,8 +65,9 @@ import io.prestosql.sql.analyzer.SemanticErrorCode;
 import io.prestosql.sql.analyzer.SemanticException;
 import io.prestosql.sql.gen.ExpressionCompiler;
 import io.prestosql.sql.parser.SqlParser;
+import io.prestosql.sql.planner.ExpressionInterpreter;
 import io.prestosql.sql.planner.Symbol;
-import io.prestosql.sql.planner.SymbolToInputRewriter;
+import io.prestosql.sql.planner.TypeAnalyzer;
 import io.prestosql.sql.planner.TypeProvider;
 import io.prestosql.sql.planner.plan.PlanNodeId;
 import io.prestosql.sql.relational.RowExpression;
@@ -80,7 +81,6 @@ import io.prestosql.sql.tree.NodeRef;
 import io.prestosql.sql.tree.SymbolReference;
 import io.prestosql.testing.LocalQueryRunner;
 import io.prestosql.testing.MaterializedResult;
-import io.prestosql.testing.TestingTransactionHandle;
 import io.prestosql.type.TypeRegistry;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
@@ -128,12 +128,11 @@ import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
 import static io.prestosql.sql.ExpressionUtils.rewriteIdentifiersToSymbolReferences;
 import static io.prestosql.sql.ParsingUtil.createParsingOptions;
-import static io.prestosql.sql.analyzer.ExpressionAnalyzer.analyzeExpressionsWithSymbols;
-import static io.prestosql.sql.analyzer.ExpressionAnalyzer.getExpressionTypesFromInput;
+import static io.prestosql.sql.analyzer.ExpressionAnalyzer.analyzeExpressions;
 import static io.prestosql.sql.planner.iterative.rule.CanonicalizeExpressionRewriter.canonicalizeExpression;
 import static io.prestosql.sql.relational.Expressions.constant;
 import static io.prestosql.sql.relational.SqlToRowExpressionTranslator.translate;
-import static io.prestosql.sql.tree.BooleanLiteral.TRUE_LITERAL;
+import static io.prestosql.testing.TestingHandles.TEST_TABLE_HANDLE;
 import static io.prestosql.testing.TestingTaskContext.createTaskContext;
 import static io.prestosql.type.UnknownType.UNKNOWN;
 import static java.lang.String.format;
@@ -168,17 +167,17 @@ public final class FunctionAssertions
 
     private static final Page ZERO_CHANNEL_PAGE = new Page(1);
 
-    private static final Map<Integer, Type> INPUT_TYPES = ImmutableMap.<Integer, Type>builder()
-            .put(0, BIGINT)
-            .put(1, VARCHAR)
-            .put(2, DOUBLE)
-            .put(3, BOOLEAN)
-            .put(4, BIGINT)
-            .put(5, VARCHAR)
-            .put(6, VARCHAR)
-            .put(7, TIMESTAMP_WITH_TIME_ZONE)
-            .put(8, VARBINARY)
-            .put(9, INTEGER)
+    private static final Map<Symbol, Type> INPUT_TYPES = ImmutableMap.<Symbol, Type>builder()
+            .put(new Symbol("bound_long"), BIGINT)
+            .put(new Symbol("bound_string"), VARCHAR)
+            .put(new Symbol("bound_double"), DOUBLE)
+            .put(new Symbol("bound_boolean"), BOOLEAN)
+            .put(new Symbol("bound_timestamp"), BIGINT)
+            .put(new Symbol("bound_pattern"), VARCHAR)
+            .put(new Symbol("bound_null_string"), VARCHAR)
+            .put(new Symbol("bound_timestamp_with_timezone"), TIMESTAMP_WITH_TIME_ZONE)
+            .put(new Symbol("bound_binary_literal"), VARBINARY)
+            .put(new Symbol("bound_integer"), INTEGER)
             .build();
 
     private static final Map<Symbol, Integer> INPUT_MAPPING = ImmutableMap.<Symbol, Integer>builder()
@@ -213,6 +212,7 @@ public final class FunctionAssertions
     private final Session session;
     private final LocalQueryRunner runner;
     private final Metadata metadata;
+    private final TypeAnalyzer typeAnalyzer;
     private final ExpressionCompiler compiler;
 
     public FunctionAssertions()
@@ -231,6 +231,7 @@ public final class FunctionAssertions
         runner = new LocalQueryRunner(session, featuresConfig);
         metadata = runner.getMetadata();
         compiler = runner.getExpressionCompiler();
+        typeAnalyzer = new TypeAnalyzer(SQL_PARSER, metadata);
     }
 
     public TypeRegistry getTypeRegistry()
@@ -599,8 +600,7 @@ public final class FunctionAssertions
         results.add(directOperatorValue);
 
         // interpret
-        Operator interpretedFilterProject = interpretedFilterProject(Optional.empty(), projectionExpression, expectedType, session);
-        Object interpretedValue = selectSingleValue(interpretedFilterProject, expectedType);
+        Object interpretedValue = interpret(projectionExpression, expectedType, session);
         results.add(interpretedValue);
 
         // execute over normal operator
@@ -630,16 +630,7 @@ public final class FunctionAssertions
 
     private RowExpression toRowExpression(Session session, Expression projectionExpression)
     {
-        Expression translatedProjection = new SymbolToInputRewriter(INPUT_MAPPING).rewrite(projectionExpression);
-        Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypesFromInput(
-                session,
-                metadata,
-                SQL_PARSER,
-                INPUT_TYPES,
-                ImmutableList.of(translatedProjection),
-                ImmutableList.of(),
-                WarningCollector.NOOP);
-        return toRowExpression(translatedProjection, expressionTypes);
+        return toRowExpression(projectionExpression, typeAnalyzer.getTypes(session, TypeProvider.copyOf(INPUT_TYPES), projectionExpression), INPUT_MAPPING);
     }
 
     private Object selectSingleValue(OperatorFactory operatorFactory, Type type, Session session)
@@ -706,7 +697,10 @@ public final class FunctionAssertions
         }
 
         // interpret
-        boolean interpretedValue = executeFilter(interpretedFilterProject(Optional.of(filterExpression), TRUE_LITERAL, BOOLEAN, session));
+        Boolean interpretedValue = (Boolean) interpret(filterExpression, BOOLEAN, session);
+        if (interpretedValue == null) {
+            interpretedValue = false;
+        }
         results.add(interpretedValue);
 
         // execute over normal operator
@@ -749,7 +743,7 @@ public final class FunctionAssertions
 
         parsedExpression = rewriteIdentifiersToSymbolReferences(parsedExpression);
 
-        final ExpressionAnalysis analysis = analyzeExpressionsWithSymbols(
+        final ExpressionAnalysis analysis = analyzeExpressions(
                 session,
                 metadata,
                 SQL_PARSER,
@@ -869,29 +863,46 @@ public final class FunctionAssertions
         return hasSymbolReferences.get();
     }
 
-    private Operator interpretedFilterProject(Optional<Expression> filter, Expression projection, Type expectedType, Session session)
+    private Object interpret(Expression expression, Type expectedType, Session session)
     {
-        Optional<PageFilter> pageFilter = filter
-                .map(expression -> new InterpretedPageFilter(
-                        expression,
-                        SYMBOL_TYPES,
-                        INPUT_MAPPING,
-                        metadata,
-                        SQL_PARSER,
-                        session));
+        Map<NodeRef<Expression>, Type> expressionTypes = typeAnalyzer.getTypes(session, SYMBOL_TYPES, expression);
+        ExpressionInterpreter evaluator = ExpressionInterpreter.expressionInterpreter(expression, metadata, session, expressionTypes);
 
-        PageProjection pageProjection = new InterpretedPageProjection(projection, SYMBOL_TYPES, INPUT_MAPPING, metadata, SQL_PARSER, session);
-        assertEquals(pageProjection.getType(), expectedType);
+        Object result = evaluator.evaluate(symbol -> {
+            int position = 0;
+            int channel = INPUT_MAPPING.get(symbol);
+            Type type = SYMBOL_TYPES.get(symbol);
 
-        PageProcessor processor = new PageProcessor(pageFilter, ImmutableList.of(pageProjection));
-        OperatorFactory operatorFactory = new FilterAndProjectOperatorFactory(
-                0,
-                new PlanNodeId("test"),
-                () -> processor,
-                ImmutableList.of(pageProjection.getType()),
-                new DataSize(0, BYTE),
-                0);
-        return operatorFactory.createOperator(createDriverContext(session));
+            Block block = SOURCE_PAGE.getBlock(channel);
+
+            if (block.isNull(position)) {
+                return null;
+            }
+
+            Class<?> javaType = type.getJavaType();
+            if (javaType == boolean.class) {
+                return type.getBoolean(block, position);
+            }
+            else if (javaType == long.class) {
+                return type.getLong(block, position);
+            }
+            else if (javaType == double.class) {
+                return type.getDouble(block, position);
+            }
+            else if (javaType == Slice.class) {
+                return type.getSlice(block, position);
+            }
+            else if (javaType == Block.class) {
+                return type.getObject(block, position);
+            }
+            else {
+                throw new UnsupportedOperationException("not yet implemented");
+            }
+        });
+
+        // convert result from stack type to Type ObjectValue
+        Block block = Utils.nativeValueToBlock(expectedType, result);
+        return expectedType.getObjectValue(session.toConnectorSession(), block, 0);
     }
 
     private static OperatorFactory compileFilterWithNoInputColumns(RowExpression filter, ExpressionCompiler compiler)
@@ -942,6 +953,7 @@ public final class FunctionAssertions
                     PAGE_SOURCE_PROVIDER,
                     cursorProcessor,
                     pageProcessor,
+                    TEST_TABLE_HANDLE,
                     ImmutableList.of(),
                     ImmutableList.of(projection.getType()),
                     new DataSize(0, BYTE),
@@ -955,9 +967,9 @@ public final class FunctionAssertions
         }
     }
 
-    private RowExpression toRowExpression(Expression projection, Map<NodeRef<Expression>, Type> expressionTypes)
+    private RowExpression toRowExpression(Expression projection, Map<NodeRef<Expression>, Type> expressionTypes, Map<Symbol, Integer> layout)
     {
-        return translate(projection, SCALAR, expressionTypes, metadata.getFunctionRegistry(), metadata.getTypeManager(), session, false);
+        return translate(projection, SCALAR, expressionTypes, layout, metadata.getFunctionRegistry(), metadata.getTypeManager(), session, false);
     }
 
     private static Page getAtMostOnePage(Operator operator, Page sourcePage)
@@ -1017,7 +1029,7 @@ public final class FunctionAssertions
             implements PageSourceProvider
     {
         @Override
-        public ConnectorPageSource createPageSource(Session session, Split split, List<ColumnHandle> columns)
+        public ConnectorPageSource createPageSource(Session session, Split split, TableHandle table, List<ColumnHandle> columns)
         {
             assertInstanceOf(split.getConnectorSplit(), FunctionAssertions.TestSplit.class);
             FunctionAssertions.TestSplit testSplit = (FunctionAssertions.TestSplit) split.getConnectorSplit();
@@ -1045,12 +1057,12 @@ public final class FunctionAssertions
 
     private static Split createRecordSetSplit()
     {
-        return new Split(new ConnectorId("test"), TestingTransactionHandle.create(), new TestSplit(true));
+        return new Split(new ConnectorId("test"), new TestSplit(true), Lifespan.taskWide());
     }
 
     private static Split createNormalSplit()
     {
-        return new Split(new ConnectorId("test"), TestingTransactionHandle.create(), new TestSplit(false));
+        return new Split(new ConnectorId("test"), new TestSplit(false), Lifespan.taskWide());
     }
 
     private static class TestSplit

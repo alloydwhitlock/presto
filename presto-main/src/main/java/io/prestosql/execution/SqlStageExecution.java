@@ -25,7 +25,6 @@ import io.prestosql.execution.StateMachine.StateChangeListener;
 import io.prestosql.execution.buffer.OutputBuffers;
 import io.prestosql.execution.scheduler.SplitSchedulerStats;
 import io.prestosql.failureDetector.FailureDetector;
-import io.prestosql.metadata.RemoteTransactionHandle;
 import io.prestosql.metadata.Split;
 import io.prestosql.spi.Node;
 import io.prestosql.spi.PrestoException;
@@ -470,7 +469,7 @@ public final class SqlStageExecution
     {
         // Fetch the results from the buffer assigned to the task based on id
         URI splitLocation = uriBuilderFrom(taskLocation).appendPath("results").appendPath(String.valueOf(taskId.getId())).build();
-        return new Split(REMOTE_CONNECTOR_ID, new RemoteTransactionHandle(), new RemoteSplit(splitLocation));
+        return new Split(REMOTE_CONNECTOR_ID, new RemoteSplit(splitLocation), Lifespan.taskWide());
     }
 
     private synchronized void updateTaskStatus(TaskStatus taskStatus)
@@ -557,6 +556,7 @@ public final class SqlStageExecution
     {
         private long previousUserMemory;
         private long previousSystemMemory;
+        private long previousRevocableMemory;
         private final Set<Lifespan> completedDriverGroups = new HashSet<>();
 
         @Override
@@ -575,11 +575,14 @@ public final class SqlStageExecution
         {
             long currentUserMemory = taskStatus.getMemoryReservation().toBytes();
             long currentSystemMemory = taskStatus.getSystemMemoryReservation().toBytes();
+            long currentRevocableMemory = taskStatus.getRevocableMemoryReservation().toBytes();
             long deltaUserMemoryInBytes = currentUserMemory - previousUserMemory;
-            long deltaTotalMemoryInBytes = (currentUserMemory + currentSystemMemory) - (previousUserMemory + previousSystemMemory);
+            long deltaRevocableMemoryInBytes = currentRevocableMemory - previousRevocableMemory;
+            long deltaTotalMemoryInBytes = (currentUserMemory + currentSystemMemory + currentRevocableMemory) - (previousUserMemory + previousSystemMemory + previousRevocableMemory);
             previousUserMemory = currentUserMemory;
             previousSystemMemory = currentSystemMemory;
-            stateMachine.updateMemoryUsage(deltaUserMemoryInBytes, deltaTotalMemoryInBytes);
+            previousRevocableMemory = currentRevocableMemory;
+            stateMachine.updateMemoryUsage(deltaUserMemoryInBytes, deltaRevocableMemoryInBytes, deltaTotalMemoryInBytes);
         }
 
         private synchronized void updateCompletedDriverGroups(TaskStatus taskStatus)

@@ -28,6 +28,7 @@ import org.openjdk.jol.info.ClassLayout;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.time.ZoneId;
 import java.util.List;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
@@ -35,7 +36,6 @@ import static io.prestosql.orc.metadata.ColumnEncoding.ColumnEncodingKind.DICTIO
 import static io.prestosql.orc.metadata.ColumnEncoding.ColumnEncodingKind.DICTIONARY_V2;
 import static io.prestosql.orc.metadata.ColumnEncoding.ColumnEncodingKind.DIRECT;
 import static io.prestosql.orc.metadata.ColumnEncoding.ColumnEncodingKind.DIRECT_V2;
-import static io.prestosql.orc.metadata.ColumnEncoding.ColumnEncodingKind.DWRF_DIRECT;
 import static io.prestosql.spi.type.Chars.byteCountWithoutTrailingSpace;
 import static io.prestosql.spi.type.Chars.isCharType;
 import static io.prestosql.spi.type.VarbinaryType.isVarbinaryType;
@@ -74,13 +74,11 @@ public class SliceStreamReader
     }
 
     @Override
-    public void startStripe(InputStreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
+    public void startStripe(ZoneId timeZone, InputStreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
             throws IOException
     {
-        ColumnEncodingKind columnEncodingKind = encoding.get(streamDescriptor.getStreamId())
-                .getColumnEncoding(streamDescriptor.getSequence())
-                .getColumnEncodingKind();
-        if (columnEncodingKind == DIRECT || columnEncodingKind == DIRECT_V2 || columnEncodingKind == DWRF_DIRECT) {
+        ColumnEncodingKind columnEncodingKind = encoding.get(streamDescriptor.getStreamId()).getColumnEncodingKind();
+        if (columnEncodingKind == DIRECT || columnEncodingKind == DIRECT_V2) {
             currentReader = directReader;
         }
         else if (columnEncodingKind == DICTIONARY || columnEncodingKind == DICTIONARY_V2) {
@@ -90,7 +88,7 @@ public class SliceStreamReader
             throw new IllegalArgumentException("Unsupported encoding " + columnEncodingKind);
         }
 
-        currentReader.startStripe(dictionaryStreamSources, encoding);
+        currentReader.startStripe(timeZone, dictionaryStreamSources, encoding);
     }
 
     @Override
@@ -139,8 +137,8 @@ public class SliceStreamReader
     public void close()
     {
         try (Closer closer = Closer.create()) {
-            closer.register(() -> directReader.close());
-            closer.register(() -> dictionaryReader.close());
+            closer.register(directReader::close);
+            closer.register(dictionaryReader::close);
         }
         catch (IOException e) {
             throw new UncheckedIOException(e);

@@ -26,7 +26,7 @@ import io.airlift.tpch.TpchColumnType;
 import io.airlift.tpch.TpchColumnTypes;
 import io.prestosql.GroupByHashPageIndexerFactory;
 import io.prestosql.metadata.MetadataManager;
-import io.prestosql.plugin.hive.metastore.ExtendedHiveMetastore;
+import io.prestosql.plugin.hive.metastore.HiveMetastore;
 import io.prestosql.plugin.hive.metastore.HivePageSinkMetadata;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PageBuilder;
@@ -34,10 +34,10 @@ import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.connector.ConnectorPageSink;
 import io.prestosql.spi.connector.ConnectorPageSource;
 import io.prestosql.spi.connector.ConnectorSession;
+import io.prestosql.spi.connector.ConnectorTableHandle;
 import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.type.Type;
-import io.prestosql.sql.analyzer.FeaturesConfig;
 import io.prestosql.sql.gen.JoinCompiler;
 import io.prestosql.testing.MaterializedResult;
 import io.prestosql.testing.TestingConnectorSession;
@@ -97,10 +97,10 @@ public class TestHivePageSink
     public void testAllFormats()
             throws Exception
     {
-        HiveClientConfig config = new HiveClientConfig();
+        HiveConfig config = new HiveConfig();
         File tempDir = Files.createTempDir();
         try {
-            ExtendedHiveMetastore metastore = createTestingFileHiveMetastore(new File(tempDir, "metastore"));
+            HiveMetastore metastore = createTestingFileHiveMetastore(new File(tempDir, "metastore"));
             for (HiveStorageFormat format : HiveStorageFormat.values()) {
                 config.setHiveStorageFormat(format);
                 config.setHiveCompressionCodec(NONE);
@@ -122,12 +122,12 @@ public class TestHivePageSink
         }
     }
 
-    private static String makeFileName(File tempDir, HiveClientConfig config)
+    private static String makeFileName(File tempDir, HiveConfig config)
     {
         return tempDir.getAbsolutePath() + "/" + config.getHiveStorageFormat().name() + "." + config.getHiveCompressionCodec().name();
     }
 
-    private static long writeTestFile(HiveClientConfig config, ExtendedHiveMetastore metastore, String outputPath)
+    private static long writeTestFile(HiveConfig config, HiveMetastore metastore, String outputPath)
     {
         HiveTransactionHandle transaction = new HiveTransactionHandle();
         HiveWriterStats stats = new HiveWriterStats();
@@ -206,7 +206,7 @@ public class TestHivePageSink
         return resultBuilder.build();
     }
 
-    private static ConnectorPageSource createPageSource(HiveTransactionHandle transaction, HiveClientConfig config, File outputFile)
+    private static ConnectorPageSource createPageSource(HiveTransactionHandle transaction, HiveConfig config, File outputFile)
     {
         Properties splitProperties = new Properties();
         splitProperties.setProperty(FILE_INPUT_FORMAT, config.getHiveStorageFormat().getInputFormat());
@@ -230,11 +230,12 @@ public class TestHivePageSink
                 ImmutableMap.of(),
                 Optional.empty(),
                 false);
+        ConnectorTableHandle table = new HiveTableHandle(SCHEMA_NAME, TABLE_NAME);
         HivePageSourceProvider provider = new HivePageSourceProvider(config, createTestHdfsEnvironment(config), getDefaultHiveRecordCursorProvider(config), getDefaultHiveDataStreamFactories(config), TYPE_MANAGER);
-        return provider.createPageSource(transaction, getSession(config), split, ImmutableList.copyOf(getColumnHandles()));
+        return provider.createPageSource(transaction, getSession(config), split, table, ImmutableList.copyOf(getColumnHandles()));
     }
 
-    private static ConnectorPageSink createPageSink(HiveTransactionHandle transaction, HiveClientConfig config, ExtendedHiveMetastore metastore, Path outputPath, HiveWriterStats stats)
+    private static ConnectorPageSink createPageSink(HiveTransactionHandle transaction, HiveConfig config, HiveMetastore metastore, Path outputPath, HiveWriterStats stats)
     {
         LocationHandle locationHandle = new LocationHandle(outputPath, outputPath, false, DIRECT_TO_TARGET_NEW_DIRECTORY);
         HiveOutputTableHandle handle = new HiveOutputTableHandle(
@@ -257,7 +258,7 @@ public class TestHivePageSink
                 hdfsEnvironment,
                 PAGE_SORTER,
                 metastore,
-                new GroupByHashPageIndexerFactory(new JoinCompiler(MetadataManager.createTestMetadataManager(), new FeaturesConfig())),
+                new GroupByHashPageIndexerFactory(new JoinCompiler(MetadataManager.createTestMetadataManager())),
                 TYPE_MANAGER,
                 config,
                 new HiveLocationService(hdfsEnvironment),
@@ -270,7 +271,7 @@ public class TestHivePageSink
         return provider.createPageSink(transaction, getSession(config), handle);
     }
 
-    private static TestingConnectorSession getSession(HiveClientConfig config)
+    private static TestingConnectorSession getSession(HiveConfig config)
     {
         return new TestingConnectorSession(new HiveSessionProperties(config, new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
     }

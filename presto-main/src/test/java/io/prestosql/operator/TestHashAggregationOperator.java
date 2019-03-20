@@ -35,7 +35,6 @@ import io.prestosql.spi.type.StandardTypes;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spiller.Spiller;
 import io.prestosql.spiller.SpillerFactory;
-import io.prestosql.sql.analyzer.FeaturesConfig;
 import io.prestosql.sql.gen.JoinCompiler;
 import io.prestosql.sql.planner.plan.AggregationNode.Step;
 import io.prestosql.sql.planner.plan.PlanNodeId;
@@ -55,10 +54,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 
 import static com.google.common.base.Strings.nullToEmpty;
-import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.util.concurrent.Futures.immediateFailedFuture;
-import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.slice.SizeOf.SIZE_OF_DOUBLE;
 import static io.airlift.slice.SizeOf.SIZE_OF_LONG;
@@ -110,7 +107,7 @@ public class TestHashAggregationOperator
 
     private ExecutorService executor;
     private ScheduledExecutorService scheduledExecutor;
-    private JoinCompiler joinCompiler = new JoinCompiler(MetadataManager.createTestMetadataManager(), new FeaturesConfig());
+    private JoinCompiler joinCompiler = new JoinCompiler(MetadataManager.createTestMetadataManager());
     private DummySpillerFactory spillerFactory;
 
     @BeforeMethod
@@ -755,47 +752,6 @@ public class TestHashAggregationOperator
         }
         assertTrue(aggregationBuilder instanceof InMemoryHashAggregationBuilder);
         return ((InMemoryHashAggregationBuilder) aggregationBuilder).getCapacity();
-    }
-
-    private static class DummySpillerFactory
-            implements SpillerFactory
-    {
-        private long spillsCount;
-
-        @Override
-        public Spiller create(List<Type> types, SpillContext spillContext, AggregatedMemoryContext memoryContext)
-        {
-            return new Spiller()
-            {
-                private final List<Iterable<Page>> spills = new ArrayList<>();
-
-                @Override
-                public ListenableFuture<?> spill(Iterator<Page> pageIterator)
-                {
-                    spillsCount++;
-                    spills.add(ImmutableList.copyOf(pageIterator));
-                    return immediateFuture(null);
-                }
-
-                @Override
-                public List<Iterator<Page>> getSpills()
-                {
-                    return spills.stream()
-                            .map(Iterable::iterator)
-                            .collect(toImmutableList());
-                }
-
-                @Override
-                public void close()
-                {
-                }
-            };
-        }
-
-        public long getSpillsCount()
-        {
-            return spillsCount;
-        }
     }
 
     private static class FailingSpillerFactory

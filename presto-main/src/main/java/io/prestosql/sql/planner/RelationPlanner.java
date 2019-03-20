@@ -20,7 +20,6 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.UnmodifiableIterator;
 import io.prestosql.Session;
-import io.prestosql.SystemSessionProperties;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.TableHandle;
 import io.prestosql.spi.connector.ColumnHandle;
@@ -158,7 +157,7 @@ class RelationPlanner
         }
 
         List<Symbol> outputSymbols = outputSymbolsBuilder.build();
-        PlanNode root = new TableScanNode(idAllocator.getNextId(), handle, outputSymbols, columns.build());
+        PlanNode root = TableScanNode.newInstance(idAllocator.getNextId(), handle, outputSymbols, columns.build());
         return new RelationPlan(root, scope, outputSymbols);
     }
 
@@ -171,7 +170,7 @@ class RelationPlanner
         List<Symbol> mappings = subPlan.getFieldMappings();
 
         if (node.getColumnNames() != null) {
-            ImmutableList.Builder<Symbol> newMappings = ImmutableList.<Symbol>builder();
+            ImmutableList.Builder<Symbol> newMappings = ImmutableList.builder();
             Assignments.Builder assignments = Assignments.builder();
 
             // project only the visible columns from the underlying relation
@@ -331,6 +330,7 @@ class RelationPlanner
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
+                Optional.empty(),
                 Optional.empty());
 
         if (node.getType() != INNER) {
@@ -365,6 +365,7 @@ class RelationPlanner
                             .addAll(rightPlanBuilder.getRoot().getOutputSymbols())
                             .build(),
                     Optional.of(rewrittenFilterCondition),
+                    Optional.empty(),
                     Optional.empty(),
                     Optional.empty(),
                     Optional.empty());
@@ -474,6 +475,7 @@ class RelationPlanner
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
+                Optional.empty(),
                 Optional.empty());
 
         // Add a projection to produce the outputs of the columns in the USING clause,
@@ -573,7 +575,7 @@ class RelationPlanner
             Symbol inputSymbol = translations.get(expression);
             if (type instanceof ArrayType) {
                 Type elementType = ((ArrayType) type).getElementType();
-                if (!SystemSessionProperties.isLegacyUnnest(session) && elementType instanceof RowType) {
+                if (elementType instanceof RowType) {
                     ImmutableList.Builder<Symbol> unnestSymbolBuilder = ImmutableList.builder();
                     for (int i = 0; i < ((RowType) elementType).getFields().size(); i++) {
                         unnestSymbolBuilder.add(unnestedSymbolsIterator.next());
@@ -674,7 +676,7 @@ class RelationPlanner
             argumentSymbols.add(inputSymbol);
             if (type instanceof ArrayType) {
                 Type elementType = ((ArrayType) type).getElementType();
-                if (!SystemSessionProperties.isLegacyUnnest(session) && elementType instanceof RowType) {
+                if (elementType instanceof RowType) {
                     ImmutableList.Builder<Symbol> unnestSymbolBuilder = ImmutableList.builder();
                     for (int i = 0; i < ((RowType) elementType).getFields().size(); i++) {
                         unnestSymbolBuilder.add(unnestedSymbolsIterator.next());

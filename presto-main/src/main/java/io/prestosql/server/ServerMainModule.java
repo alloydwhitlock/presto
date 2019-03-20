@@ -20,6 +20,7 @@ import com.google.inject.Provides;
 import com.google.inject.Scopes;
 import io.airlift.concurrent.BoundedExecutor;
 import io.airlift.configuration.AbstractConfigurationAwareModule;
+import io.airlift.http.server.HttpServerConfig;
 import io.airlift.slice.Slice;
 import io.airlift.stats.GcMonitor;
 import io.airlift.stats.JmxGcMonitor;
@@ -126,6 +127,7 @@ import io.prestosql.sql.parser.SqlParserOptions;
 import io.prestosql.sql.planner.CompilerConfig;
 import io.prestosql.sql.planner.LocalExecutionPlanner;
 import io.prestosql.sql.planner.NodePartitioningManager;
+import io.prestosql.sql.planner.TypeAnalyzer;
 import io.prestosql.sql.tree.Expression;
 import io.prestosql.sql.tree.FunctionCall;
 import io.prestosql.transaction.TransactionManagerConfig;
@@ -142,7 +144,6 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 
-import static com.google.common.base.Strings.nullToEmpty;
 import static com.google.inject.multibindings.Multibinder.newSetBinder;
 import static com.google.inject.multibindings.OptionalBinder.newOptionalBinder;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
@@ -184,6 +185,10 @@ public class ServerMainModule
         else {
             install(new WorkerModule());
         }
+
+        configBinder(binder).bindConfigDefaults(HttpServerConfig.class, httpServerConfig -> {
+            httpServerConfig.setAdminEnabled(false);
+        });
 
         install(new InternalCommunicationModule());
 
@@ -350,6 +355,7 @@ public class ServerMainModule
         binder.bind(Metadata.class).to(MetadataManager.class).in(Scopes.SINGLETON);
 
         // type
+        binder.bind(TypeAnalyzer.class).in(Scopes.SINGLETON);
         binder.bind(TypeRegistry.class).in(Scopes.SINGLETON);
         binder.bind(TypeManager.class).to(TypeRegistry.class).in(Scopes.SINGLETON);
         jsonBinder(binder).addDeserializerBinding(Type.class).to(TypeDeserializer.class);
@@ -392,8 +398,7 @@ public class ServerMainModule
         // presto announcement
         discoveryBinder(binder).bindHttpAnnouncement("presto")
                 .addProperty("node_version", nodeVersion.toString())
-                .addProperty("coordinator", String.valueOf(serverConfig.isCoordinator()))
-                .addProperty("connectorIds", nullToEmpty(serverConfig.getDataSources()));
+                .addProperty("coordinator", String.valueOf(serverConfig.isCoordinator()));
 
         // server info resource
         jaxrsBinder(binder).bind(ServerInfoResource.class);

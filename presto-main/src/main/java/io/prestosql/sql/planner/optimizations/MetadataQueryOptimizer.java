@@ -21,11 +21,9 @@ import io.prestosql.Session;
 import io.prestosql.SystemSessionProperties;
 import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.metadata.TableLayout;
-import io.prestosql.metadata.TableLayoutResult;
+import io.prestosql.metadata.TableProperties;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
-import io.prestosql.spi.connector.Constraint;
 import io.prestosql.spi.connector.DiscretePredicates;
 import io.prestosql.spi.predicate.NullableValue;
 import io.prestosql.spi.predicate.TupleDomain;
@@ -137,18 +135,8 @@ public class MetadataQueryOptimizer
 
             // Materialize the list of partitions and replace the TableScan node
             // with a Values node
-            TableLayout layout = null;
-            if (!tableScan.getLayout().isPresent()) {
-                List<TableLayoutResult> layouts = metadata.getLayouts(session, tableScan.getTable(), Constraint.alwaysTrue(), Optional.empty());
-                if (layouts.size() == 1) {
-                    layout = Iterables.getOnlyElement(layouts).getLayout();
-                }
-            }
-            else {
-                layout = metadata.getLayout(session, tableScan.getLayout().get());
-            }
-
-            if (layout == null || !layout.getDiscretePredicates().isPresent()) {
+            TableProperties layout = metadata.getTableProperties(session, tableScan.getTable());
+            if (!layout.getDiscretePredicates().isPresent()) {
                 return context.defaultRewrite(node);
             }
             DiscretePredicates predicates = layout.getDiscretePredicates().get();

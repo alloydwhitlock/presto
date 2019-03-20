@@ -29,13 +29,13 @@ import org.openjdk.jol.info.ClassLayout;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.time.ZoneId;
 import java.util.List;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static io.prestosql.orc.metadata.Stream.StreamKind.DATA;
 import static io.prestosql.orc.metadata.Stream.StreamKind.DICTIONARY_DATA;
-import static io.prestosql.orc.metadata.Stream.StreamKind.IN_DICTIONARY;
 import static io.prestosql.orc.metadata.Stream.StreamKind.PRESENT;
 import static io.prestosql.orc.stream.MissingInputStreamSource.missingStreamSource;
 import static java.util.Objects.requireNonNull;
@@ -72,7 +72,7 @@ public class LongDictionaryStreamReader
     private boolean dictionaryOpen;
     private boolean rowGroupOpen;
 
-    private LocalMemoryContext systemMemoryContext;
+    private final LocalMemoryContext systemMemoryContext;
 
     public LongDictionaryStreamReader(StreamDescriptor streamDescriptor, LocalMemoryContext systemMemoryContext)
     {
@@ -197,12 +197,10 @@ public class LongDictionaryStreamReader
     }
 
     @Override
-    public void startStripe(InputStreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
+    public void startStripe(ZoneId timeZone, InputStreamSources dictionaryStreamSources, List<ColumnEncoding> encoding)
     {
         dictionaryDataStreamSource = dictionaryStreamSources.getInputStreamSource(streamDescriptor, DICTIONARY_DATA, LongInputStream.class);
-        dictionarySize = encoding.get(streamDescriptor.getStreamId())
-                .getColumnEncoding(streamDescriptor.getSequence())
-                .getDictionarySize();
+        dictionarySize = encoding.get(streamDescriptor.getStreamId()).getDictionarySize();
         dictionaryOpen = false;
 
         inDictionaryStreamSource = missingStreamSource(BooleanInputStream.class);
@@ -223,7 +221,6 @@ public class LongDictionaryStreamReader
     public void startRowGroup(InputStreamSources dataStreamSources)
     {
         presentStreamSource = dataStreamSources.getInputStreamSource(streamDescriptor, PRESENT, BooleanInputStream.class);
-        inDictionaryStreamSource = dataStreamSources.getInputStreamSource(streamDescriptor, IN_DICTIONARY, BooleanInputStream.class);
         dataStreamSource = dataStreamSources.getInputStreamSource(streamDescriptor, DATA, LongInputStream.class);
 
         readOffset = 0;

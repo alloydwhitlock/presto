@@ -38,10 +38,10 @@ import java.util.Properties;
 
 import static com.google.common.base.Throwables.throwIfInstanceOf;
 import static com.google.common.base.Throwables.throwIfUnchecked;
-import static io.prestosql.plugin.hive.RetryDriver.retry;
-import static io.prestosql.plugin.hive.s3.S3ConfigurationUpdater.S3_MAX_BACKOFF_TIME;
-import static io.prestosql.plugin.hive.s3.S3ConfigurationUpdater.S3_MAX_CLIENT_RETRIES;
-import static io.prestosql.plugin.hive.s3.S3ConfigurationUpdater.S3_MAX_RETRY_TIME;
+import static io.prestosql.plugin.hive.s3.PrestoS3FileSystem.S3_MAX_BACKOFF_TIME;
+import static io.prestosql.plugin.hive.s3.PrestoS3FileSystem.S3_MAX_CLIENT_RETRIES;
+import static io.prestosql.plugin.hive.s3.PrestoS3FileSystem.S3_MAX_RETRY_TIME;
+import static io.prestosql.plugin.hive.util.RetryDriver.retry;
 import static java.lang.String.format;
 import static java.net.HttpURLConnection.HTTP_BAD_REQUEST;
 import static java.net.HttpURLConnection.HTTP_FORBIDDEN;
@@ -76,7 +76,7 @@ public abstract class S3SelectLineRecordReader
 
     S3SelectLineRecordReader(
             Configuration configuration,
-            HiveClientConfig clientConfig,
+            HiveConfig hiveConfig,
             Path path,
             long start,
             long length,
@@ -85,7 +85,7 @@ public abstract class S3SelectLineRecordReader
             PrestoS3ClientFactory s3ClientFactory)
     {
         requireNonNull(configuration, "configuration is null");
-        requireNonNull(clientConfig, "clientConfig is null");
+        requireNonNull(hiveConfig, "hiveConfig is null");
         requireNonNull(schema, "schema is null");
         requireNonNull(path, "path is null");
         requireNonNull(ionSqlQuery, "ionSqlQuery is null");
@@ -106,7 +106,7 @@ public abstract class S3SelectLineRecordReader
         this.maxBackoffTime = Duration.valueOf(configuration.get(S3_MAX_BACKOFF_TIME, defaults.getS3MaxBackoffTime().toString()));
         this.maxRetryTime = Duration.valueOf(configuration.get(S3_MAX_RETRY_TIME, defaults.getS3MaxRetryTime().toString()));
 
-        this.selectClient = new PrestoS3SelectClient(configuration, clientConfig, s3ClientFactory);
+        this.selectClient = new PrestoS3SelectClient(configuration, hiveConfig, s3ClientFactory);
         closer.register(selectClient);
     }
 

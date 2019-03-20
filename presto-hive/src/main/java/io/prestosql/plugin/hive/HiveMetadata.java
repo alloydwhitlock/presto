@@ -33,6 +33,7 @@ import io.prestosql.plugin.hive.LocationService.WriteInfo;
 import io.prestosql.plugin.hive.metastore.Column;
 import io.prestosql.plugin.hive.metastore.Database;
 import io.prestosql.plugin.hive.metastore.HiveColumnStatistics;
+import io.prestosql.plugin.hive.metastore.HivePrincipal;
 import io.prestosql.plugin.hive.metastore.HivePrivilegeInfo;
 import io.prestosql.plugin.hive.metastore.HivePrivilegeInfo.HivePrivilege;
 import io.prestosql.plugin.hive.metastore.Partition;
@@ -236,7 +237,6 @@ public class HiveMetadata
     private final DateTimeZone timeZone;
     private final TypeManager typeManager;
     private final LocationService locationService;
-    private final TableParameterCodec tableParameterCodec;
     private final JsonCodec<PartitionUpdate> partitionUpdateCodec;
     private final boolean writesToNonManagedTablesEnabled;
     private final boolean createsOfNonManagedTablesEnabled;
@@ -255,7 +255,6 @@ public class HiveMetadata
             boolean createsOfNonManagedTablesEnabled,
             TypeManager typeManager,
             LocationService locationService,
-            TableParameterCodec tableParameterCodec,
             JsonCodec<PartitionUpdate> partitionUpdateCodec,
             TypeTranslator typeTranslator,
             String prestoVersion,
@@ -270,7 +269,6 @@ public class HiveMetadata
         this.timeZone = requireNonNull(timeZone, "timeZone is null");
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.locationService = requireNonNull(locationService, "locationService is null");
-        this.tableParameterCodec = requireNonNull(tableParameterCodec, "tableParameterCodec is null");
         this.partitionUpdateCodec = requireNonNull(partitionUpdateCodec, "partitionUpdateCodec is null");
         this.writesToNonManagedTablesEnabled = writesToNonManagedTablesEnabled;
         this.createsOfNonManagedTablesEnabled = createsOfNonManagedTablesEnabled;
@@ -393,7 +391,7 @@ public class HiveMetadata
                 Iterable<List<Object>> records = () ->
                         stream(partitionManager.getPartitions(metastore, sourceTableHandle, targetConstraint).getPartitions())
                                 .map(hivePartition ->
-                                        (List<Object>) IntStream.range(0, partitionColumns.size())
+                                        IntStream.range(0, partitionColumns.size())
                                                 .mapToObj(fieldIdToColumnHandle::get)
                                                 .map(columnHandle -> hivePartition.getKeys().get(columnHandle).getValue())
                                                 .collect(toList()))
@@ -420,6 +418,21 @@ public class HiveMetadata
     }
 
     private ConnectorTableMetadata getTableMetadata(SchemaTableName tableName)
+    {
+        try {
+            return doGetTableMetadata(tableName);
+        }
+        catch (PrestoException e) {
+            throw e;
+        }
+        catch (RuntimeException e) {
+            // Errors related to invalid or unsupported information in the Metastore should be handled explicitly (eg. as PrestoException(HIVE_INVALID_METADATA)).
+            // This is just a catch-all solution so that we have any actionable information when eg. SELECT * FROM information_schema.columns fails.
+            throw new RuntimeException("Failed to construct table metadata for table " + tableName, e);
+        }
+    }
+
+    private ConnectorTableMetadata doGetTableMetadata(SchemaTableName tableName)
     {
         Optional<Table> table = metastore.getTable(tableName.getSchemaName(), tableName.getTableName());
         if (!table.isPresent() || table.get().getTableType().equals(TableType.VIRTUAL_VIEW.name())) {
@@ -473,14 +486,11 @@ public class HiveMetadata
             properties.put(ORC_BLOOM_FILTER_FPP, Double.parseDouble(orcBloomFilterFfp));
         }
 
-        // Avro specfic property
+        // Avro specific property
         String avroSchemaUrl = table.get().getParameters().get(AVRO_SCHEMA_URL_KEY);
         if (avroSchemaUrl != null) {
             properties.put(AVRO_SCHEMA_URL, avroSchemaUrl);
         }
-
-        // Hook point for extended versions of the Hive Plugin
-        properties.putAll(tableParameterCodec.decode(table.get().getParameters()));
 
         Optional<String> comment = Optional.ofNullable(table.get().getParameters().get(TABLE_COMMENT));
 
@@ -670,7 +680,7 @@ public class HiveMetadata
 
         List<HiveColumnHandle> columnHandles = getColumnHandles(tableMetadata, ImmutableSet.copyOf(partitionedBy), typeTranslator);
         HiveStorageFormat hiveStorageFormat = getHiveStorageFormat(tableMetadata.getProperties());
-        Map<String, String> tableProperties = getEmptyTableProperties(tableMetadata, !partitionedBy.isEmpty(), new HdfsContext(session, schemaName, tableName));
+        Map<String, String> tableProperties = getEmptyTableProperties(tableMetadata, new HdfsContext(session, schemaName, tableName));
 
         hiveStorageFormat.validateColumns(columnHandles);
 
@@ -722,12 +732,9 @@ public class HiveMetadata
                 new PartitionStatistics(basicStatistics, ImmutableMap.of()));
     }
 
-    private Map<String, String> getEmptyTableProperties(ConnectorTableMetadata tableMetadata, boolean partitioned, HdfsContext hdfsContext)
+    private Map<String, String> getEmptyTableProperties(ConnectorTableMetadata tableMetadata, HdfsContext hdfsContext)
     {
         ImmutableMap.Builder<String, String> tableProperties = ImmutableMap.builder();
-
-        // Hook point for extended versions of the Hive Plugin
-        tableProperties.putAll(tableParameterCodec.encode(tableMetadata.getProperties()));
 
         // ORC format specific properties
         List<String> columns = getOrcBloomFilterColumns(tableMetadata.getProperties());
@@ -865,7 +872,7 @@ public class HiveMetadata
 
     private static PrincipalPrivileges buildInitialPrivilegeSet(String tableOwner)
     {
-        PrestoPrincipal owner = new PrestoPrincipal(USER, tableOwner);
+        HivePrincipal owner = new HivePrincipal(USER, tableOwner);
         return new PrincipalPrivileges(
                 ImmutableMultimap.<String, HivePrivilegeInfo>builder()
                         .put(tableOwner, new HivePrivilegeInfo(HivePrivilege.SELECT, true, owner, owner))
@@ -1033,7 +1040,7 @@ public class HiveMetadata
         String schemaName = schemaTableName.getSchemaName();
         String tableName = schemaTableName.getTableName();
 
-        Map<String, String> tableProperties = getEmptyTableProperties(tableMetadata, !partitionedBy.isEmpty(), new HdfsContext(session, schemaName, tableName));
+        Map<String, String> tableProperties = getEmptyTableProperties(tableMetadata, new HdfsContext(session, schemaName, tableName));
         List<HiveColumnHandle> columnHandles = getColumnHandles(tableMetadata, ImmutableSet.copyOf(partitionedBy), typeTranslator);
         HiveStorageFormat partitionStorageFormat = isRespectTableFormat(session) ? tableStorageFormat : getHiveStorageFormat(session);
 
@@ -1729,7 +1736,7 @@ public class HiveMetadata
     }
 
     @Override
-    public ConnectorTableLayoutHandle getAlternativeLayoutHandle(ConnectorSession session, ConnectorTableLayoutHandle tableLayoutHandle, ConnectorPartitioningHandle partitioningHandle)
+    public ConnectorTableLayoutHandle makeCompatiblePartitioning(ConnectorSession session, ConnectorTableLayoutHandle tableLayoutHandle, ConnectorPartitioningHandle partitioningHandle)
     {
         HiveTableLayoutHandle hiveLayoutHandle = (HiveTableLayoutHandle) tableLayoutHandle;
         HivePartitioningHandle hivePartitioningHandle = (HivePartitioningHandle) partitioningHandle;
@@ -1933,25 +1940,25 @@ public class HiveMetadata
     @Override
     public Set<RoleGrant> listRoleGrants(ConnectorSession session, PrestoPrincipal principal)
     {
-        return ImmutableSet.copyOf(metastore.listRoleGrants(principal));
+        return ImmutableSet.copyOf(metastore.listRoleGrants(HivePrincipal.from(principal)));
     }
 
     @Override
     public void grantRoles(ConnectorSession session, Set<String> roles, Set<PrestoPrincipal> grantees, boolean withAdminOption, Optional<PrestoPrincipal> grantor)
     {
-        metastore.grantRoles(roles, grantees, withAdminOption, grantor.orElse(new PrestoPrincipal(USER, session.getUser())));
+        metastore.grantRoles(roles, HivePrincipal.from(grantees), withAdminOption, grantor.map(HivePrincipal::from).orElse(new HivePrincipal(USER, session.getUser())));
     }
 
     @Override
     public void revokeRoles(ConnectorSession session, Set<String> roles, Set<PrestoPrincipal> grantees, boolean adminOptionFor, Optional<PrestoPrincipal> grantor)
     {
-        metastore.revokeRoles(roles, grantees, adminOptionFor, grantor.orElse(new PrestoPrincipal(USER, session.getUser())));
+        metastore.revokeRoles(roles, HivePrincipal.from(grantees), adminOptionFor, grantor.map(HivePrincipal::from).orElse(new HivePrincipal(USER, session.getUser())));
     }
 
     @Override
     public Set<RoleGrant> listApplicableRoles(ConnectorSession session, PrestoPrincipal principal)
     {
-        return ThriftMetastoreUtil.listApplicableRoles(principal, metastore::listRoleGrants)
+        return ThriftMetastoreUtil.listApplicableRoles(HivePrincipal.from(principal), metastore::listRoleGrants)
                 .collect(toImmutableSet());
     }
 
@@ -1969,10 +1976,10 @@ public class HiveMetadata
         String tableName = schemaTableName.getTableName();
 
         Set<HivePrivilegeInfo> hivePrivilegeInfos = privileges.stream()
-                .map(privilege -> new HivePrivilegeInfo(toHivePrivilege(privilege), grantOption, new PrestoPrincipal(USER, session.getUser()), new PrestoPrincipal(USER, session.getUser())))
+                .map(privilege -> new HivePrivilegeInfo(toHivePrivilege(privilege), grantOption, new HivePrincipal(USER, session.getUser()), new HivePrincipal(USER, session.getUser())))
                 .collect(toSet());
 
-        metastore.grantTablePrivileges(schemaName, tableName, grantee, hivePrivilegeInfos);
+        metastore.grantTablePrivileges(schemaName, tableName, HivePrincipal.from(grantee), hivePrivilegeInfos);
     }
 
     @Override
@@ -1982,16 +1989,16 @@ public class HiveMetadata
         String tableName = schemaTableName.getTableName();
 
         Set<HivePrivilegeInfo> hivePrivilegeInfos = privileges.stream()
-                .map(privilege -> new HivePrivilegeInfo(toHivePrivilege(privilege), grantOption, new PrestoPrincipal(USER, session.getUser()), new PrestoPrincipal(USER, session.getUser())))
+                .map(privilege -> new HivePrivilegeInfo(toHivePrivilege(privilege), grantOption, new HivePrincipal(USER, session.getUser()), new HivePrincipal(USER, session.getUser())))
                 .collect(toSet());
 
-        metastore.revokeTablePrivileges(schemaName, tableName, grantee, hivePrivilegeInfos);
+        metastore.revokeTablePrivileges(schemaName, tableName, HivePrincipal.from(grantee), hivePrivilegeInfos);
     }
 
     @Override
     public List<GrantInfo> listTablePrivileges(ConnectorSession session, SchemaTablePrefix schemaTablePrefix)
     {
-        Set<PrestoPrincipal> principals = listEnabledPrincipals(metastore, session.getIdentity())
+        Set<HivePrincipal> principals = listEnabledPrincipals(metastore, session.getIdentity())
                 .collect(toImmutableSet());
         boolean isAdminRoleSet = hasAdminRole(principals);
         ImmutableList.Builder<GrantInfo> result = ImmutableList.builder();
@@ -2000,7 +2007,7 @@ public class HiveMetadata
                 result.addAll(buildGrants(tableName, null));
             }
             else {
-                for (PrestoPrincipal grantee : principals) {
+                for (HivePrincipal grantee : principals) {
                     result.addAll(buildGrants(tableName, grantee));
                 }
             }
@@ -2008,7 +2015,7 @@ public class HiveMetadata
         return result.build();
     }
 
-    private List<GrantInfo> buildGrants(SchemaTableName tableName, PrestoPrincipal principal)
+    private List<GrantInfo> buildGrants(SchemaTableName tableName, HivePrincipal principal)
     {
         ImmutableList.Builder<GrantInfo> result = ImmutableList.builder();
         Set<HivePrivilegeInfo> hivePrivileges = metastore.listTablePrivileges(tableName.getSchemaName(), tableName.getTableName(), principal);
@@ -2017,9 +2024,9 @@ public class HiveMetadata
             for (PrivilegeInfo prestoPrivilege : prestoPrivileges) {
                 GrantInfo grant = new GrantInfo(
                         prestoPrivilege,
-                        hivePrivilege.getGrantee(),
+                        hivePrivilege.getGrantee().toPrestoPrincipal(),
                         tableName,
-                        Optional.of(hivePrivilege.getGrantor()),
+                        Optional.of(hivePrivilege.getGrantor().toPrestoPrincipal()),
                         Optional.empty());
                 result.add(grant);
             }
@@ -2027,7 +2034,7 @@ public class HiveMetadata
         return result.build();
     }
 
-    private static boolean hasAdminRole(Set<PrestoPrincipal> roles)
+    private static boolean hasAdminRole(Set<HivePrincipal> roles)
     {
         return roles.stream().anyMatch(principal -> principal.getName().equalsIgnoreCase(ADMIN_ROLE_NAME));
     }

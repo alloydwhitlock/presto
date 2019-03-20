@@ -17,6 +17,7 @@ import com.google.common.base.Joiner;
 import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
+import io.prestosql.spi.block.Block;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.predicate.Domain;
@@ -31,7 +32,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.collect.Iterables.getOnlyElement;
@@ -153,6 +153,9 @@ public class QueryBuilder
             else if (javaType == Slice.class) {
                 ((SliceWriteFunction) writeFunction).set(statement, parameterIndex, (Slice) value);
             }
+            else if (javaType == Block.class) {
+                ((BlockWriteFunction) writeFunction).set(statement, parameterIndex, (Block) value);
+            }
             else {
                 throw new VerifyException(format("Unexpected type %s with java type %s", type, javaType.getName()));
             }
@@ -183,8 +186,6 @@ public class QueryBuilder
 
     private String toPredicate(String columnName, Domain domain, JdbcColumnHandle column, List<TypeAndValue> accumulator)
     {
-        checkArgument(domain.getType().isOrderable(), "Domain type must be orderable");
-
         if (domain.getValues().isNone()) {
             return domain.isNullAllowed() ? quote(columnName) + " IS NULL" : ALWAYS_FALSE;
         }

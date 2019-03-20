@@ -5,7 +5,7 @@
     <parent>
         <groupId>io.prestosql</groupId>
         <artifactId>presto-root</artifactId>
-        <version>304-SNAPSHOT</version>
+        <version>307-SNAPSHOT</version>
     </parent>
 
     <artifactId>presto-hive</artifactId>
@@ -20,11 +20,6 @@
         <dependency>
             <groupId>io.prestosql</groupId>
             <artifactId>presto-plugin-toolkit</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>com.facebook.hive</groupId>
-            <artifactId>hive-dwrf</artifactId>
         </dependency>
 
         <dependency>
@@ -336,7 +331,7 @@
                         <configuration>
                             <excludes>
                                 <!-- Exclude tests against Glue from build -->
-                                <exclude>**/TestHiveClientGlueMetastore.java</exclude>
+                                <exclude>**/TestHiveGlueMetastore.java</exclude>
                                 <!-- Parquet tests take a long time so only run them in the CI server -->
                                 <exclude>**/TestFullParquetReader.java</exclude>
                             </excludes>
@@ -355,7 +350,7 @@
                         <artifactId>maven-surefire-plugin</artifactId>
                         <configuration>
                             <includes>
-                                <include>**/TestHiveClientGlueMetastore.java</include>
+                                <include>**/TestHiveGlueMetastore.java</include>
                             </includes>
                         </configuration>
                     </plugin>

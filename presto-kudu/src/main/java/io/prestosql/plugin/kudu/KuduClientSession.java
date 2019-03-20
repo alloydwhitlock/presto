@@ -347,9 +347,6 @@ public class KuduClientSession
             }
             client.alterTable(rawName, alterOptions);
         }
-        catch (PrestoException e) {
-            throw e;
-        }
         catch (KuduException e) {
             throw new PrestoException(GENERIC_INTERNAL_ERROR, e);
         }
@@ -455,7 +452,7 @@ public class KuduClientSession
         if (constraintSummary.isNone()) {
             return false;
         }
-        else if (!constraintSummary.isAll()) {
+        if (!constraintSummary.isAll()) {
             Schema schema = table.getSchema();
             for (TupleDomain.ColumnDomain<ColumnHandle> columnDomain : constraintSummary.getColumnDomains().get()) {
                 int position = ((KuduColumnHandle) columnDomain.getColumn()).getOrdinalPosition();

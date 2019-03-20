@@ -24,13 +24,12 @@ import io.prestosql.metadata.InsertTableHandle;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.metadata.TableHandle;
-import io.prestosql.metadata.TableLayout;
-import io.prestosql.metadata.TableLayoutResult;
 import io.prestosql.metadata.TableMetadata;
 import io.prestosql.plugin.hive.HiveSessionProperties.InsertExistingPartitionsBehavior;
 import io.prestosql.spi.connector.CatalogSchemaTableName;
 import io.prestosql.spi.connector.ColumnMetadata;
 import io.prestosql.spi.connector.ConnectorSession;
+import io.prestosql.spi.connector.ConnectorTableLayoutHandle;
 import io.prestosql.spi.connector.Constraint;
 import io.prestosql.spi.security.Identity;
 import io.prestosql.spi.security.SelectedRole;
@@ -86,7 +85,6 @@ import static io.prestosql.plugin.hive.HiveQueryRunner.HIVE_CATALOG;
 import static io.prestosql.plugin.hive.HiveQueryRunner.TPCH_SCHEMA;
 import static io.prestosql.plugin.hive.HiveQueryRunner.createBucketedSession;
 import static io.prestosql.plugin.hive.HiveQueryRunner.createQueryRunner;
-import static io.prestosql.plugin.hive.HiveSessionProperties.RCFILE_OPTIMIZED_WRITER_ENABLED;
 import static io.prestosql.plugin.hive.HiveSessionProperties.getInsertExistingPartitionsBehavior;
 import static io.prestosql.plugin.hive.HiveTableProperties.BUCKETED_BY_PROPERTY;
 import static io.prestosql.plugin.hive.HiveTableProperties.BUCKET_COUNT_PROPERTY;
@@ -242,9 +240,6 @@ public class TestHiveIntegrationSmokeTest
 
     private void testReadNoColumns(Session session, HiveStorageFormat storageFormat)
     {
-        if (!insertOperationsSupported(storageFormat)) {
-            return;
-        }
         assertUpdate(session, format("CREATE TABLE test_read_no_columns WITH (format = '%s') AS SELECT 0 x", storageFormat), 1);
         assertQuery(session, "SELECT count(*) FROM test_read_no_columns", "SELECT 1");
         assertUpdate(session, "DROP TABLE test_read_no_columns");
@@ -297,10 +292,6 @@ public class TestHiveIntegrationSmokeTest
 
     private void testCreatePartitionedTable(Session session, HiveStorageFormat storageFormat)
     {
-        if (!insertOperationsSupported(storageFormat)) {
-            return;
-        }
-
         @Language("SQL") String createTable = "" +
                 "CREATE TABLE test_partitioned_table (" +
                 "  _string VARCHAR" +
@@ -545,10 +536,6 @@ public class TestHiveIntegrationSmokeTest
 
     private void testCreateTableAs(Session session, HiveStorageFormat storageFormat)
     {
-        if (!insertOperationsSupported(storageFormat)) {
-            return;
-        }
-
         @Language("SQL") String select = "SELECT" +
                 " 'foo' _varchar" +
                 ", CAST('bar' AS CHAR(10)) _char" +
@@ -953,11 +940,8 @@ public class TestHiveIntegrationSmokeTest
     public void testCastNullToColumnTypes()
     {
         String tableName = "test_cast_null_to_column_types";
-        Session session = Session.builder(getSession())
-                .setCatalogSessionProperty(catalog, "orc_optimized_writer_enabled", "true")
-                .build();
 
-        assertUpdate(session, "" +
+        assertUpdate("" +
                 "CREATE TABLE " + tableName + " (" +
                 "  col1 bigint," +
                 "  col2 map(bigint, bigint)," +
@@ -967,7 +951,7 @@ public class TestHiveIntegrationSmokeTest
                 "  partitioned_by = ARRAY[ 'partition_key' ] " +
                 ")");
 
-        assertUpdate(session, format("INSERT INTO %s (col1) VALUES (1), (2), (3)", tableName), 3);
+        assertUpdate(format("INSERT INTO %s (col1) VALUES (1), (2), (3)", tableName), 3);
 
         assertUpdate("DROP TABLE " + tableName);
     }
@@ -1122,9 +1106,6 @@ public class TestHiveIntegrationSmokeTest
 
     private void testInsert(Session session, HiveStorageFormat storageFormat)
     {
-        if (!insertOperationsSupported(storageFormat)) {
-            return;
-        }
         @Language("SQL") String createTable = "" +
                 "CREATE TABLE test_insert_format_table " +
                 "(" +
@@ -1404,7 +1385,7 @@ public class TestHiveIntegrationSmokeTest
     @Test
     public void testPartitionPerScanLimit()
     {
-        TestingHiveStorageFormat storageFormat = new TestingHiveStorageFormat(getSession(), HiveStorageFormat.DWRF);
+        TestingHiveStorageFormat storageFormat = new TestingHiveStorageFormat(getSession(), HiveStorageFormat.ORC);
         testWithStorageFormat(storageFormat, this::testPartitionPerScanLimit);
     }
 
@@ -1691,9 +1672,13 @@ public class TestHiveIntegrationSmokeTest
                     Optional<TableHandle> tableHandle = metadata.getTableHandle(transactionSession, new QualifiedObjectName(catalog, TPCH_SCHEMA, tableName));
                     assertTrue(tableHandle.isPresent());
 
-                    List<TableLayoutResult> layouts = metadata.getLayouts(transactionSession, tableHandle.get(), Constraint.alwaysTrue(), Optional.empty());
-                    TableLayout layout = getOnlyElement(layouts).getLayout();
-                    return propertyGetter.apply((HiveTableLayoutHandle) layout.getHandle().getConnectorHandle());
+                    ConnectorTableLayoutHandle connectorLayout = metadata.getLayout(transactionSession, tableHandle.get(), Constraint.alwaysTrue(), Optional.empty())
+                            .get()
+                            .getNewTableHandle()
+                            .getLayout()
+                            .get();
+
+                    return propertyGetter.apply((HiveTableLayoutHandle) connectorLayout);
                 });
     }
 
@@ -2902,25 +2887,14 @@ public class TestHiveIntegrationSmokeTest
     @Test
     public void testRcTextCharDecoding()
     {
-        testRcTextCharDecoding(false);
-        testRcTextCharDecoding(true);
-    }
-
-    private void testRcTextCharDecoding(boolean rcFileOptimizedWriterEnabled)
-    {
-        String catalog = getSession().getCatalog().get();
-        Session session = Session.builder(getSession())
-                .setCatalogSessionProperty(catalog, RCFILE_OPTIMIZED_WRITER_ENABLED, Boolean.toString(rcFileOptimizedWriterEnabled))
-                .build();
-
-        assertUpdate(session, "CREATE TABLE test_table_with_char_rc WITH (format = 'RCTEXT') AS SELECT CAST('khaki' AS CHAR(7)) char_column", 1);
+        assertUpdate("CREATE TABLE test_table_with_char_rc WITH (format = 'RCTEXT') AS SELECT CAST('khaki' AS CHAR(7)) char_column", 1);
         try {
-            assertQuery(session,
+            assertQuery(
                     "SELECT * FROM test_table_with_char_rc WHERE char_column = 'khaki  '",
                     "VALUES (CAST('khaki' AS CHAR(7)))");
         }
         finally {
-            assertUpdate(session, "DROP TABLE test_table_with_char_rc");
+            assertUpdate("DROP TABLE test_table_with_char_rc");
         }
     }
 
@@ -3097,6 +3071,14 @@ public class TestHiveIntegrationSmokeTest
                         "(null, null, null, null, 0E0, null, null)");
 
         assertUpdate(format("DROP TABLE %s", tableName));
+    }
+
+    @Test
+    public void testAnalyzePropertiesSystemTable()
+    {
+        assertQuery(
+                "SELECT * FROM system.metadata.analyze_properties WHERE catalog_name = 'hive'",
+                "SELECT 'hive', 'partitions', '', 'array(array(varchar))', 'Partitions to be analyzed'");
     }
 
     @Test
@@ -3683,11 +3665,6 @@ public class TestHiveIntegrationSmokeTest
         assertNotNull(results.getMaterializedRows().get(0).getField(0));
     }
 
-    private boolean insertOperationsSupported(HiveStorageFormat storageFormat)
-    {
-        return storageFormat != HiveStorageFormat.DWRF;
-    }
-
     private Type canonicalizeType(Type type)
     {
         HiveType hiveType = HiveType.toHiveType(typeTranslator, type);
@@ -3773,12 +3750,6 @@ public class TestHiveIntegrationSmokeTest
         for (HiveStorageFormat hiveStorageFormat : HiveStorageFormat.values()) {
             formats.add(new TestingHiveStorageFormat(session, hiveStorageFormat));
         }
-        formats.add(new TestingHiveStorageFormat(
-                Session.builder(session).setCatalogSessionProperty(session.getCatalog().get(), "orc_optimized_writer_enabled", "true").build(),
-                HiveStorageFormat.ORC));
-        formats.add(new TestingHiveStorageFormat(
-                Session.builder(session).setCatalogSessionProperty(session.getCatalog().get(), "orc_optimized_writer_enabled", "true").build(),
-                HiveStorageFormat.DWRF));
         return formats.build();
     }
 

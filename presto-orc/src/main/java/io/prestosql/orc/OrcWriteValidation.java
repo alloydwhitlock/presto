@@ -50,6 +50,7 @@ import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.VarcharType;
 import org.openjdk.jol.info.ClassLayout;
 
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -69,7 +70,6 @@ import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static io.prestosql.orc.OrcWriteValidation.OrcWriteValidationMode.BOTH;
 import static io.prestosql.orc.OrcWriteValidation.OrcWriteValidationMode.DETAILED;
 import static io.prestosql.orc.OrcWriteValidation.OrcWriteValidationMode.HASHED;
-import static io.prestosql.orc.metadata.DwrfMetadataWriter.STATIC_METADATA;
 import static io.prestosql.orc.metadata.OrcMetadataReader.maxStringTruncateToValidRange;
 import static io.prestosql.orc.metadata.OrcMetadataReader.minStringTruncateToValidRange;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
@@ -101,6 +101,7 @@ public class OrcWriteValidation
 
     private final List<Integer> version;
     private final CompressionKind compression;
+    private final ZoneId timeZone;
     private final int rowGroupMaxRowCount;
     private final List<String> columnNames;
     private final Map<String, Slice> metadata;
@@ -113,6 +114,7 @@ public class OrcWriteValidation
     private OrcWriteValidation(
             List<Integer> version,
             CompressionKind compression,
+            ZoneId timeZone,
             int rowGroupMaxRowCount,
             List<String> columnNames,
             Map<String, Slice> metadata,
@@ -124,6 +126,7 @@ public class OrcWriteValidation
     {
         this.version = version;
         this.compression = compression;
+        this.timeZone = timeZone;
         this.rowGroupMaxRowCount = rowGroupMaxRowCount;
         this.columnNames = columnNames;
         this.metadata = metadata;
@@ -144,6 +147,19 @@ public class OrcWriteValidation
         return compression;
     }
 
+    public ZoneId getTimeZone()
+    {
+        return timeZone;
+    }
+
+    public void validateTimeZone(OrcDataSourceId orcDataSourceId, ZoneId actualTimeZone)
+            throws OrcCorruptionException
+    {
+        if (!timeZone.equals(actualTimeZone)) {
+            throw new OrcCorruptionException(orcDataSourceId, "Unexpected time zone");
+        }
+    }
+
     public int getRowGroupMaxRowCount()
     {
         return rowGroupMaxRowCount;
@@ -162,12 +178,7 @@ public class OrcWriteValidation
     public void validateMetadata(OrcDataSourceId orcDataSourceId, Map<String, Slice> actualMetadata)
             throws OrcCorruptionException
     {
-        // Filter out metadata value statically added by the DWRF writer
-        Map<String, Slice> filteredMetadata = actualMetadata.entrySet().stream()
-                .filter(entry -> !STATIC_METADATA.containsKey(entry.getKey()))
-                .collect(toImmutableMap(Entry::getKey, Entry::getValue));
-
-        if (!metadata.equals(filteredMetadata)) {
+        if (!metadata.equals(actualMetadata)) {
             throw new OrcCorruptionException(orcDataSourceId, "Unexpected metadata");
         }
     }
@@ -180,10 +191,6 @@ public class OrcWriteValidation
     public void validateFileStatistics(OrcDataSourceId orcDataSourceId, List<ColumnStatistics> actualFileStatistics)
             throws OrcCorruptionException
     {
-        if (actualFileStatistics.isEmpty()) {
-            // DWRF file statistics are disabled
-            return;
-        }
         validateColumnStatisticsEquivalent(orcDataSourceId, "file", actualFileStatistics, fileStatistics);
     }
 
@@ -192,11 +199,6 @@ public class OrcWriteValidation
     {
         requireNonNull(actualStripes, "actualStripes is null");
         requireNonNull(actualStripeStatistics, "actualStripeStatistics is null");
-
-        if (actualStripeStatistics.isEmpty()) {
-            // DWRF does not have stripe statistics
-            return;
-        }
 
         if (actualStripeStatistics.size() != stripeStatistics.size()) {
             throw new OrcCorruptionException(orcDataSourceId, "Write validation failed: unexpected number of columns in stripe statistics");
@@ -230,10 +232,6 @@ public class OrcWriteValidation
 
         int rowGroupCount = expectedRowGroupStatistics.size();
         for (Entry<StreamId, List<RowGroupIndex>> entry : actualRowGroupStatistics.entrySet()) {
-            // TODO: Remove once the Presto writer supports flat map
-            if (entry.getKey().getSequence() > 0) {
-                throw new OrcCorruptionException(orcDataSourceId, "Unexpected sequence ID for column %s at offset %s", entry.getKey().getColumn(), stripeOffset);
-            }
             if (entry.getValue().size() != rowGroupCount) {
                 throw new OrcCorruptionException(orcDataSourceId, "Unexpected row group count stripe in at offset %s", stripeOffset);
             }
@@ -836,6 +834,7 @@ public class OrcWriteValidation
 
         private List<Integer> version;
         private CompressionKind compression;
+        private ZoneId timeZone;
         private int rowGroupMaxRowCount;
         private int stringStatisticsLimitInBytes;
         private List<String> columnNames;
@@ -867,6 +866,11 @@ public class OrcWriteValidation
         public void setCompression(CompressionKind compression)
         {
             this.compression = compression;
+        }
+
+        public void setTimeZone(ZoneId timeZone)
+        {
+            this.timeZone = timeZone;
         }
 
         public void setRowGroupMaxRowCount(int rowGroupMaxRowCount)
@@ -934,6 +938,7 @@ public class OrcWriteValidation
             return new OrcWriteValidation(
                     version,
                     compression,
+                    timeZone,
                     rowGroupMaxRowCount,
                     columnNames,
                     metadata,

@@ -627,7 +627,7 @@ public class LongOutputStreamV2
         patchLength = gapIdx;
 
         // if the element to be patched is the first and only element then
-        // max gap will be 0, but to store the gap as 0 we need atleast 1 bit
+        // max gap will be 0, but to store the gap as 0 we need at least 1 bit
         if (maxGap == 0 && patchLength != 0) {
             patchGapWidth = 1;
         }
@@ -693,7 +693,7 @@ public class LongOutputStreamV2
         isFixedDelta = true;
     }
 
-    public void flush()
+    private void flush()
     {
         if (numLiterals == 0) {
             return;

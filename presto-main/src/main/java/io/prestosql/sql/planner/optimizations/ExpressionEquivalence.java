@@ -20,13 +20,11 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Ordering;
 import io.airlift.slice.Slice;
 import io.prestosql.Session;
-import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.Signature;
 import io.prestosql.spi.type.Type;
-import io.prestosql.sql.parser.SqlParser;
 import io.prestosql.sql.planner.Symbol;
-import io.prestosql.sql.planner.SymbolToInputRewriter;
+import io.prestosql.sql.planner.TypeAnalyzer;
 import io.prestosql.sql.planner.TypeProvider;
 import io.prestosql.sql.relational.CallExpression;
 import io.prestosql.sql.relational.ConstantExpression;
@@ -36,7 +34,6 @@ import io.prestosql.sql.relational.RowExpression;
 import io.prestosql.sql.relational.RowExpressionVisitor;
 import io.prestosql.sql.relational.VariableReferenceExpression;
 import io.prestosql.sql.tree.Expression;
-import io.prestosql.sql.tree.NodeRef;
 
 import java.util.Comparator;
 import java.util.HashMap;
@@ -58,10 +55,8 @@ import static io.prestosql.spi.function.OperatorType.LESS_THAN;
 import static io.prestosql.spi.function.OperatorType.LESS_THAN_OR_EQUAL;
 import static io.prestosql.spi.function.OperatorType.NOT_EQUAL;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
-import static io.prestosql.sql.analyzer.ExpressionAnalyzer.getExpressionTypesFromInput;
 import static io.prestosql.sql.relational.SqlToRowExpressionTranslator.translate;
 import static java.lang.Integer.min;
-import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
 
 public class ExpressionEquivalence
@@ -69,26 +64,24 @@ public class ExpressionEquivalence
     private static final Ordering<RowExpression> ROW_EXPRESSION_ORDERING = Ordering.from(new RowExpressionComparator());
     private static final CanonicalizationVisitor CANONICALIZATION_VISITOR = new CanonicalizationVisitor();
     private final Metadata metadata;
-    private final SqlParser sqlParser;
+    private final TypeAnalyzer typeAnalyzer;
 
-    public ExpressionEquivalence(Metadata metadata, SqlParser sqlParser)
+    public ExpressionEquivalence(Metadata metadata, TypeAnalyzer typeAnalyzer)
     {
         this.metadata = requireNonNull(metadata, "metadata is null");
-        this.sqlParser = requireNonNull(sqlParser, "sqlParser is null");
+        this.typeAnalyzer = requireNonNull(typeAnalyzer, "typeAnalyzer is null");
     }
 
     public boolean areExpressionsEquivalent(Session session, Expression leftExpression, Expression rightExpression, TypeProvider types)
     {
         Map<Symbol, Integer> symbolInput = new HashMap<>();
-        Map<Integer, Type> inputTypes = new HashMap<>();
         int inputId = 0;
         for (Entry<Symbol, Type> entry : types.allTypes().entrySet()) {
             symbolInput.put(entry.getKey(), inputId);
-            inputTypes.put(inputId, entry.getValue());
             inputId++;
         }
-        RowExpression leftRowExpression = toRowExpression(session, leftExpression, symbolInput, inputTypes);
-        RowExpression rightRowExpression = toRowExpression(session, rightExpression, symbolInput, inputTypes);
+        RowExpression leftRowExpression = toRowExpression(session, leftExpression, symbolInput, types);
+        RowExpression rightRowExpression = toRowExpression(session, rightExpression, symbolInput, types);
 
         RowExpression canonicalizedLeft = leftRowExpression.accept(CANONICALIZATION_VISITOR, null);
         RowExpression canonicalizedRight = rightRowExpression.accept(CANONICALIZATION_VISITOR, null);
@@ -96,23 +89,17 @@ public class ExpressionEquivalence
         return canonicalizedLeft.equals(canonicalizedRight);
     }
 
-    private RowExpression toRowExpression(Session session, Expression expression, Map<Symbol, Integer> symbolInput, Map<Integer, Type> inputTypes)
+    private RowExpression toRowExpression(Session session, Expression expression, Map<Symbol, Integer> symbolInput, TypeProvider types)
     {
-        // replace qualified names with input references since row expressions do not support these
-        Expression expressionWithInputReferences = new SymbolToInputRewriter(symbolInput).rewrite(expression);
-
-        // determine the type of every expression
-        Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypesFromInput(
+        return translate(
+                expression,
+                SCALAR,
+                typeAnalyzer.getTypes(session, types, expression),
+                symbolInput,
+                metadata.getFunctionRegistry(),
+                metadata.getTypeManager(),
                 session,
-                metadata,
-                sqlParser,
-                inputTypes,
-                expressionWithInputReferences,
-                emptyList(), /* parameters have already been replaced */
-                WarningCollector.NOOP);
-
-        // convert to row expression
-        return translate(expressionWithInputReferences, SCALAR, expressionTypes, metadata.getFunctionRegistry(), metadata.getTypeManager(), session, false);
+                false);
     }
 
     private static class CanonicalizationVisitor
@@ -261,11 +248,9 @@ public class ExpressionEquivalence
                     if (rightValue == null) {
                         return 0;
                     }
-                    else {
-                        return -1;
-                    }
+                    return -1;
                 }
-                else if (rightValue == null) {
+                if (rightValue == null) {
                     return 1;
                 }
 

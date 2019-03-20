@@ -15,8 +15,10 @@ package io.prestosql.sql.planner.planPrinter;
 
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
-import io.prestosql.cost.PlanNodeCostEstimate;
+import io.prestosql.cost.PlanCostEstimate;
 import io.prestosql.cost.PlanNodeStatsEstimate;
+import io.prestosql.sql.planner.Symbol;
+import io.prestosql.sql.planner.planPrinter.NodeRepresentation.TypedSymbol;
 
 import java.util.List;
 import java.util.Locale;
@@ -30,6 +32,7 @@ import static java.lang.Double.isFinite;
 import static java.lang.Double.isNaN;
 import static java.lang.String.format;
 import static java.util.Collections.emptyMap;
+import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toList;
 
 public class TextRenderer
@@ -58,7 +61,9 @@ public class TextRenderer
                 .append(node.getName())
                 .append(node.getIdentifier())
                 .append(" => [")
-                .append(node.getOutputs())
+                .append(node.getOutputs().stream()
+                        .map(s -> s.getSymbol() + ":" + s.getType())
+                        .collect(joining(", ")))
                 .append("]\n");
 
         String estimates = printEstimates(plan, node);
@@ -96,7 +101,7 @@ public class TextRenderer
     {
         StringBuilder output = new StringBuilder();
         if (!node.getStats().isPresent() || !(plan.getTotalCpuTime().isPresent() && plan.getTotalScheduledTime().isPresent())) {
-            return "Cost: ?, Output: ? rows (?B)\n";
+            return "";
         }
 
         PlanNodeStats nodeStats = node.getStats().get();
@@ -203,7 +208,7 @@ public class TextRenderer
     private String printEstimates(PlanRepresentation plan, NodeRepresentation node)
     {
         if (node.getEstimatedStats().stream().allMatch(PlanNodeStatsEstimate::isOutputRowCountUnknown) &&
-                node.getEstimatedCost().stream().allMatch(c -> c.equals(PlanNodeCostEstimate.unknown()))) {
+                node.getEstimatedCost().stream().allMatch(c -> c.equals(PlanCostEstimate.unknown()))) {
             return "";
         }
 
@@ -213,13 +218,17 @@ public class TextRenderer
         output.append("Estimates: ");
         for (int i = 0; i < estimateCount; i++) {
             PlanNodeStatsEstimate stats = node.getEstimatedStats().get(i);
-            PlanNodeCostEstimate cost = node.getEstimatedCost().get(i);
+            PlanCostEstimate cost = node.getEstimatedCost().get(i);
+
+            List<Symbol> outputSymbols = node.getOutputs().stream()
+                    .map(TypedSymbol::getSymbol)
+                    .collect(toList());
 
             output.append(format("{rows: %s (%s), cpu: %s, memory: %s, network: %s}",
                     formatAsLong(stats.getOutputRowCount()),
-                    formatEstimateAsDataSize(stats.getOutputSizeInBytes(node.getOutputs(), plan.getTypes())),
+                    formatEstimateAsDataSize(stats.getOutputSizeInBytes(outputSymbols, plan.getTypes())),
                     formatDouble(cost.getCpuCost()),
-                    formatDouble(cost.getMemoryCost()),
+                    formatDouble(cost.getMaxMemory()),
                     formatDouble(cost.getNetworkCost())));
 
             if (i < estimateCount - 1) {

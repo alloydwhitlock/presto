@@ -110,9 +110,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -120,7 +118,6 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
-import static io.prestosql.SystemSessionProperties.isLegacyRowFieldOrdinalAccessEnabled;
 import static io.prestosql.spi.function.OperatorType.SUBSCRIPT;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
@@ -158,7 +155,6 @@ import static io.prestosql.type.UnknownType.UNKNOWN;
 import static io.prestosql.util.DateTimeUtils.parseTimestampLiteral;
 import static io.prestosql.util.DateTimeUtils.timeHasTimeZone;
 import static io.prestosql.util.DateTimeUtils.timestampHasTimeZone;
-import static io.prestosql.util.LegacyRowFieldOrdinalAccessUtil.parseAnonymousRowFieldOrdinalAccess;
 import static java.lang.String.format;
 import static java.util.Collections.unmodifiableMap;
 import static java.util.Collections.unmodifiableSet;
@@ -174,7 +170,6 @@ public class ExpressionAnalyzer
     private final Function<Node, StatementAnalyzer> statementAnalyzerFactory;
     private final TypeProvider symbolTypes;
     private final boolean isDescribe;
-    private final boolean legacyRowFieldOrdinalAccess;
 
     private final Map<NodeRef<FunctionCall>, Signature> resolvedFunctions = new LinkedHashMap<>();
     private final Set<NodeRef<SubqueryExpression>> scalarSubqueries = new LinkedHashSet<>();
@@ -211,7 +206,6 @@ public class ExpressionAnalyzer
         this.symbolTypes = requireNonNull(symbolTypes, "symbolTypes is null");
         this.parameters = requireNonNull(parameters, "parameters is null");
         this.isDescribe = isDescribe;
-        this.legacyRowFieldOrdinalAccess = isLegacyRowFieldOrdinalAccessEnabled(session);
         this.warningCollector = requireNonNull(warningCollector, "warningCollector is null");
     }
 
@@ -449,13 +443,6 @@ public class ExpressionAnalyzer
                 if (fieldName.equalsIgnoreCase(rowField.getName().orElse(null))) {
                     rowFieldType = rowField.getType();
                     break;
-                }
-            }
-
-            if (legacyRowFieldOrdinalAccess && rowFieldType == null) {
-                OptionalInt rowIndex = parseAnonymousRowFieldOrdinalAccess(fieldName, rowType.getFields());
-                if (rowIndex.isPresent()) {
-                    rowFieldType = rowType.getFields().get(rowIndex.getAsInt()).getType();
                 }
             }
 
@@ -1217,7 +1204,7 @@ public class ExpressionAnalyzer
         public Type visitGroupingOperation(GroupingOperation node, StackableAstVisitorContext<Context> context)
         {
             if (node.getGroupingColumns().size() > MAX_NUMBER_GROUPING_ARGUMENTS_BIGINT) {
-                throw new SemanticException(INVALID_PROCEDURE_ARGUMENTS, node, String.format("GROUPING supports up to %d column arguments", MAX_NUMBER_GROUPING_ARGUMENTS_BIGINT));
+                throw new SemanticException(INVALID_PROCEDURE_ARGUMENTS, node, format("GROUPING supports up to %d column arguments", MAX_NUMBER_GROUPING_ARGUMENTS_BIGINT));
             }
 
             for (Expression columnArgument : node.getGroupingColumns()) {
@@ -1434,119 +1421,12 @@ public class ExpressionAnalyzer
         }
     }
 
-    public static Map<NodeRef<Expression>, Type> getExpressionTypes(
-            Session session,
-            Metadata metadata,
-            SqlParser sqlParser,
-            TypeProvider types,
-            Expression expression,
-            List<Expression> parameters,
-            WarningCollector warningCollector)
-    {
-        return getExpressionTypes(session, metadata, sqlParser, types, expression, parameters, warningCollector, false);
-    }
-
-    public static Map<NodeRef<Expression>, Type> getExpressionTypes(
-            Session session,
-            Metadata metadata,
-            SqlParser sqlParser,
-            TypeProvider types,
-            Expression expression,
-            List<Expression> parameters,
-            WarningCollector warningCollector,
-            boolean isDescribe)
-    {
-        return getExpressionTypes(session, metadata, sqlParser, types, ImmutableList.of(expression), parameters, warningCollector, isDescribe);
-    }
-
-    public static Map<NodeRef<Expression>, Type> getExpressionTypes(
-            Session session,
-            Metadata metadata,
-            SqlParser sqlParser,
-            TypeProvider types,
-            Iterable<Expression> expressions,
-            List<Expression> parameters,
-            WarningCollector warningCollector,
-            boolean isDescribe)
-    {
-        return analyzeExpressionsWithSymbols(session, metadata, sqlParser, types, expressions, parameters, warningCollector, isDescribe).getExpressionTypes();
-    }
-
-    public static Map<NodeRef<Expression>, Type> getExpressionTypesFromInput(
-            Session session,
-            Metadata metadata,
-            SqlParser sqlParser,
-            Map<Integer, Type> types,
-            Expression expression,
-            List<Expression> parameters,
-            WarningCollector warningCollector)
-    {
-        return getExpressionTypesFromInput(session, metadata, sqlParser, types, ImmutableList.of(expression), parameters, warningCollector);
-    }
-
-    public static Map<NodeRef<Expression>, Type> getExpressionTypesFromInput(
-            Session session,
-            Metadata metadata,
-            SqlParser sqlParser,
-            Map<Integer, Type> types,
-            Iterable<Expression> expressions,
-            List<Expression> parameters,
-            WarningCollector warningCollector)
-    {
-        return analyzeExpressionsWithInputs(session, metadata, sqlParser, types, expressions, parameters, warningCollector).getExpressionTypes();
-    }
-
-    public static ExpressionAnalysis analyzeExpressionsWithSymbols(
-            Session session,
-            Metadata metadata,
-            SqlParser sqlParser,
-            TypeProvider types,
-            Iterable<Expression> expressions,
-            List<Expression> parameters,
-            WarningCollector warningCollector,
-            boolean isDescribe)
-    {
-        return analyzeExpressions(session, metadata, sqlParser, new RelationType(), types, expressions, parameters, warningCollector, isDescribe);
-    }
-
-    private static ExpressionAnalysis analyzeExpressionsWithInputs(
-            Session session,
-            Metadata metadata,
-            SqlParser sqlParser,
-            Map<Integer, Type> types,
-            Iterable<Expression> expressions,
-            List<Expression> parameters,
-            WarningCollector warningCollector)
-    {
-        Field[] fields = new Field[types.size()];
-        for (Entry<Integer, Type> entry : types.entrySet()) {
-            fields[entry.getKey()] = io.prestosql.sql.analyzer.Field.newUnqualified(Optional.empty(), entry.getValue());
-        }
-        RelationType tupleDescriptor = new RelationType(fields);
-
-        return analyzeExpressions(session, metadata, sqlParser, tupleDescriptor, TypeProvider.empty(), expressions, parameters, warningCollector);
-    }
-
     public static ExpressionAnalysis analyzeExpressions(
             Session session,
             Metadata metadata,
             SqlParser sqlParser,
-            RelationType tupleDescriptor,
             TypeProvider types,
-            Iterable<? extends Expression> expressions,
-            List<Expression> parameters,
-            WarningCollector warningCollector)
-    {
-        return analyzeExpressions(session, metadata, sqlParser, tupleDescriptor, types, expressions, parameters, warningCollector, false);
-    }
-
-    private static ExpressionAnalysis analyzeExpressions(
-            Session session,
-            Metadata metadata,
-            SqlParser sqlParser,
-            RelationType tupleDescriptor,
-            TypeProvider types,
-            Iterable<? extends Expression> expressions,
+            Iterable<Expression> expressions,
             List<Expression> parameters,
             WarningCollector warningCollector,
             boolean isDescribe)
@@ -1556,7 +1436,7 @@ public class ExpressionAnalyzer
         Analysis analysis = new Analysis(null, parameters, isDescribe);
         ExpressionAnalyzer analyzer = create(analysis, session, metadata, sqlParser, new DenyAllAccessControl(), types, warningCollector);
         for (Expression expression : expressions) {
-            analyzer.analyze(expression, Scope.builder().withRelationType(RelationId.anonymous(), tupleDescriptor).build());
+            analyzer.analyze(expression, Scope.builder().withRelationType(RelationId.anonymous(), new RelationType()).build());
         }
 
         return new ExpressionAnalysis(

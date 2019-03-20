@@ -35,7 +35,6 @@ import io.prestosql.spi.StandardErrorCode;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.connector.TableNotFoundException;
-import io.prestosql.spi.security.PrestoPrincipal;
 import io.prestosql.spi.security.PrincipalType;
 import io.prestosql.spi.security.RoleGrant;
 import io.prestosql.spi.statistics.ColumnStatisticType;
@@ -96,7 +95,7 @@ public class SemiTransactionalHiveMetastore
     private static final Logger log = Logger.get(SemiTransactionalHiveMetastore.class);
     private static final int PARTITION_COMMIT_BATCH_SIZE = 8;
 
-    private final ExtendedHiveMetastore delegate;
+    private final HiveMetastore delegate;
     private final HdfsEnvironment hdfsEnvironment;
     private final Executor renameExecutor;
     private final boolean skipDeletionForAlter;
@@ -114,7 +113,7 @@ public class SemiTransactionalHiveMetastore
     private State state = State.EMPTY;
     private boolean throwOnCleanupFailure;
 
-    public SemiTransactionalHiveMetastore(HdfsEnvironment hdfsEnvironment, ExtendedHiveMetastore delegate, Executor renameExecutor, boolean skipDeletionForAlter, boolean skipTargetCleanupOnRollback)
+    public SemiTransactionalHiveMetastore(HdfsEnvironment hdfsEnvironment, HiveMetastore delegate, Executor renameExecutor, boolean skipDeletionForAlter, boolean skipTargetCleanupOnRollback)
     {
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.delegate = requireNonNull(delegate, "delegate is null");
@@ -802,23 +801,23 @@ public class SemiTransactionalHiveMetastore
         return delegate.listRoles();
     }
 
-    public synchronized void grantRoles(Set<String> roles, Set<PrestoPrincipal> grantees, boolean withAdminOption, PrestoPrincipal grantor)
+    public synchronized void grantRoles(Set<String> roles, Set<HivePrincipal> grantees, boolean withAdminOption, HivePrincipal grantor)
     {
         setExclusive((delegate, hdfsEnvironment) -> delegate.grantRoles(roles, grantees, withAdminOption, grantor));
     }
 
-    public synchronized void revokeRoles(Set<String> roles, Set<PrestoPrincipal> grantees, boolean adminOptionFor, PrestoPrincipal grantor)
+    public synchronized void revokeRoles(Set<String> roles, Set<HivePrincipal> grantees, boolean adminOptionFor, HivePrincipal grantor)
     {
         setExclusive((delegate, hdfsEnvironment) -> delegate.revokeRoles(roles, grantees, adminOptionFor, grantor));
     }
 
-    public synchronized Set<RoleGrant> listRoleGrants(PrestoPrincipal principal)
+    public synchronized Set<RoleGrant> listRoleGrants(HivePrincipal principal)
     {
         checkReadable();
         return delegate.listRoleGrants(principal);
     }
 
-    public synchronized Set<HivePrivilegeInfo> listTablePrivileges(String databaseName, String tableName, PrestoPrincipal principal)
+    public synchronized Set<HivePrivilegeInfo> listTablePrivileges(String databaseName, String tableName, HivePrincipal principal)
     {
         checkReadable();
         SchemaTableName schemaTableName = new SchemaTableName(databaseName, tableName);
@@ -838,7 +837,7 @@ public class SemiTransactionalHiveMetastore
                 Collection<HivePrivilegeInfo> privileges = tableAction.getData().getPrincipalPrivileges().getUserPrivileges().get(principal.getName());
                 return ImmutableSet.<HivePrivilegeInfo>builder()
                         .addAll(privileges)
-                        .add(new HivePrivilegeInfo(OWNERSHIP, true, new PrestoPrincipal(USER, principal.getName()), new PrestoPrincipal(USER, principal.getName())))
+                        .add(new HivePrivilegeInfo(OWNERSHIP, true, new HivePrincipal(USER, principal.getName()), new HivePrincipal(USER, principal.getName())))
                         .build();
             }
             case INSERT_EXISTING:
@@ -850,12 +849,12 @@ public class SemiTransactionalHiveMetastore
         }
     }
 
-    public synchronized void grantTablePrivileges(String databaseName, String tableName, PrestoPrincipal grantee, Set<HivePrivilegeInfo> privileges)
+    public synchronized void grantTablePrivileges(String databaseName, String tableName, HivePrincipal grantee, Set<HivePrivilegeInfo> privileges)
     {
         setExclusive((delegate, hdfsEnvironment) -> delegate.grantTablePrivileges(databaseName, tableName, grantee, privileges));
     }
 
-    public synchronized void revokeTablePrivileges(String databaseName, String tableName, PrestoPrincipal grantee, Set<HivePrivilegeInfo> privileges)
+    public synchronized void revokeTablePrivileges(String databaseName, String tableName, HivePrincipal grantee, Set<HivePrivilegeInfo> privileges)
     {
         setExclusive((delegate, hdfsEnvironment) -> delegate.revokeTablePrivileges(databaseName, tableName, grantee, privileges));
     }
@@ -2325,7 +2324,7 @@ public class SemiTransactionalHiveMetastore
             return format("add table %s.%s", newTable.getDatabaseName(), newTable.getTableName());
         }
 
-        public void run(ExtendedHiveMetastore metastore)
+        public void run(HiveMetastore metastore)
         {
             boolean done = false;
             try {
@@ -2389,7 +2388,7 @@ public class SemiTransactionalHiveMetastore
             return true;
         }
 
-        public void undo(ExtendedHiveMetastore metastore)
+        public void undo(HiveMetastore metastore)
         {
             if (!tableCreated) {
                 return;
@@ -2422,13 +2421,13 @@ public class SemiTransactionalHiveMetastore
                     newPartition.getPartition().getValues());
         }
 
-        public void run(ExtendedHiveMetastore metastore)
+        public void run(HiveMetastore metastore)
         {
             undo = true;
             metastore.alterPartition(newPartition.getPartition().getDatabaseName(), newPartition.getPartition().getTableName(), newPartition);
         }
 
-        public void undo(ExtendedHiveMetastore metastore)
+        public void undo(HiveMetastore metastore)
         {
             if (!undo) {
                 return;
@@ -2454,7 +2453,7 @@ public class SemiTransactionalHiveMetastore
             this.merge = merge;
         }
 
-        public void run(ExtendedHiveMetastore metastore)
+        public void run(HiveMetastore metastore)
         {
             if (partitionName.isPresent()) {
                 metastore.updatePartitionStatistics(tableName.getSchemaName(), tableName.getTableName(), partitionName.get(), this::updateStatistics);
@@ -2465,7 +2464,7 @@ public class SemiTransactionalHiveMetastore
             done = true;
         }
 
-        public void undo(ExtendedHiveMetastore metastore)
+        public void undo(HiveMetastore metastore)
         {
             if (!done) {
                 return;
@@ -2501,12 +2500,12 @@ public class SemiTransactionalHiveMetastore
     {
         private final String schemaName;
         private final String tableName;
-        private final ExtendedHiveMetastore metastore;
+        private final HiveMetastore metastore;
         private final int batchSize;
         private final List<PartitionWithStatistics> partitions;
         private List<List<String>> createdPartitionValues = new ArrayList<>();
 
-        public PartitionAdder(String schemaName, String tableName, ExtendedHiveMetastore metastore, int batchSize)
+        public PartitionAdder(String schemaName, String tableName, HiveMetastore metastore, int batchSize)
         {
             this.schemaName = schemaName;
             this.tableName = tableName;
@@ -2623,6 +2622,6 @@ public class SemiTransactionalHiveMetastore
 
     private interface ExclusiveOperation
     {
-        void execute(ExtendedHiveMetastore delegate, HdfsEnvironment hdfsEnvironment);
+        void execute(HiveMetastore delegate, HdfsEnvironment hdfsEnvironment);
     }
 }

@@ -68,12 +68,12 @@ public class TestFeaturesConfig
                 .setOptimizeHashGeneration(true)
                 .setPushTableWriteThroughUnion(true)
                 .setDictionaryAggregation(false)
-                .setGroupByUsesEqualTo(false)
-                .setLegacyMapSubscript(false)
                 .setRegexLibrary(JONI)
                 .setRe2JDfaStatesLimit(Integer.MAX_VALUE)
                 .setRe2JDfaRetries(5)
                 .setSpillEnabled(false)
+                .setSpillOrderBy(true)
+                .setSpillWindowOperator(true)
                 .setAggregationOperatorUnspillMemoryLimit(DataSize.valueOf("4MB"))
                 .setSpillerSpillPaths("")
                 .setSpillerThreads(4)
@@ -89,8 +89,6 @@ public class TestFeaturesConfig
                 .setEnableForcedExchangeBelowGroupId(true)
                 .setExchangeCompressionEnabled(false)
                 .setLegacyTimestamp(true)
-                .setLegacyRowFieldOrdinalAccess(false)
-                .setLegacyCharToVarcharCoercion(false)
                 .setEnableIntermediateAggregations(false)
                 .setPushAggregationThroughJoin(true)
                 .setParseDecimalLiteralsAsDouble(false)
@@ -105,8 +103,7 @@ public class TestFeaturesConfig
                 .setArrayAggGroupImplementation(ArrayAggGroupImplementation.NEW)
                 .setMultimapAggGroupImplementation(MultimapAggGroupImplementation.NEW)
                 .setDistributedSortEnabled(true)
-                .setMaxGroupingSets(2048)
-                .setLegacyUnnestArrayRows(false));
+                .setMaxGroupingSets(2048));
     }
 
     @Test
@@ -122,10 +119,6 @@ public class TestFeaturesConfig
                 .put("optimizer.ignore-stats-calculator-failures", "false")
                 .put("optimizer.default-filter-factor-enabled", "true")
                 .put("enable-forced-exchange-below-group-id", "false")
-                .put("deprecated.group-by-uses-equal", "true")
-                .put("deprecated.legacy-map-subscript", "true")
-                .put("deprecated.legacy-row-field-ordinal-access", "true")
-                .put("deprecated.legacy-char-to-varchar-coercion", "true")
                 .put("distributed-index-joins-enabled", "true")
                 .put("join-distribution-type", "BROADCAST")
                 .put("join-max-broadcast-table-size", "42GB")
@@ -150,6 +143,8 @@ public class TestFeaturesConfig
                 .put("re2j.dfa-states-limit", "42")
                 .put("re2j.dfa-retries", "42")
                 .put("experimental.spill-enabled", "true")
+                .put("experimental.spill-order-by", "false")
+                .put("experimental.spill-window-operator", "false")
                 .put("experimental.aggregation-operator-unspill-memory-limit", "100MB")
                 .put("experimental.spiller-spill-path", "/tmp/custom/spill/path1,/tmp/custom/spill/path2")
                 .put("experimental.spiller-threads", "42")
@@ -172,7 +167,6 @@ public class TestFeaturesConfig
                 .put("optimizer.optimize-top-n-row-number", "false")
                 .put("distributed-sort", "false")
                 .put("analyzer.max-grouping-sets", "2047")
-                .put("deprecated.legacy-unnest-array-rows", "true")
                 .build();
 
         FeaturesConfig expected = new FeaturesConfig()
@@ -204,12 +198,12 @@ public class TestFeaturesConfig
                 .setPushTableWriteThroughUnion(false)
                 .setDictionaryAggregation(true)
                 .setPushAggregationThroughJoin(false)
-                .setGroupByUsesEqualTo(true)
-                .setLegacyMapSubscript(true)
                 .setRegexLibrary(RE2J)
                 .setRe2JDfaStatesLimit(42)
                 .setRe2JDfaRetries(42)
                 .setSpillEnabled(true)
+                .setSpillOrderBy(false)
+                .setSpillWindowOperator(false)
                 .setAggregationOperatorUnspillMemoryLimit(DataSize.valueOf("100MB"))
                 .setSpillerSpillPaths("/tmp/custom/spill/path1,/tmp/custom/spill/path2")
                 .setSpillerThreads(42)
@@ -218,8 +212,6 @@ public class TestFeaturesConfig
                 .setMemoryRevokingTarget(0.8)
                 .setExchangeCompressionEnabled(true)
                 .setLegacyTimestamp(false)
-                .setLegacyRowFieldOrdinalAccess(true)
-                .setLegacyCharToVarcharCoercion(true)
                 .setEnableIntermediateAggregations(true)
                 .setParseDecimalLiteralsAsDouble(true)
                 .setForceSingleNodeOutput(false)
@@ -234,7 +226,6 @@ public class TestFeaturesConfig
                 .setMultimapAggGroupImplementation(MultimapAggGroupImplementation.LEGACY)
                 .setDistributedSortEnabled(false)
                 .setMaxGroupingSets(2047)
-                .setLegacyUnnestArrayRows(true)
                 .setDefaultFilterFactorEnabled(true);
         assertFullMapping(properties, expected);
     }

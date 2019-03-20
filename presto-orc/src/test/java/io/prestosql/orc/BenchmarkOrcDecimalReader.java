@@ -49,7 +49,6 @@ import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static io.prestosql.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
-import static io.prestosql.orc.OrcEncoding.ORC;
 import static io.prestosql.orc.OrcReader.INITIAL_BATCH_SIZE;
 import static io.prestosql.orc.OrcTester.Format.ORC_12;
 import static io.prestosql.orc.OrcTester.writeOrcColumnHive;
@@ -66,7 +65,7 @@ import static java.util.UUID.randomUUID;
 @BenchmarkMode(Mode.AverageTime)
 public class BenchmarkOrcDecimalReader
 {
-    public static final DecimalType DECIMAL_TYPE = createDecimalType(30, 10);
+    private static final DecimalType DECIMAL_TYPE = createDecimalType(30, 10);
 
     @Benchmark
     public Object readDecimal(BenchmarkData data)
@@ -90,7 +89,6 @@ public class BenchmarkOrcDecimalReader
         readDecimal(data);
     }
 
-    @SuppressWarnings("FieldMayBeFinal")
     @State(Scope.Thread)
     public static class BenchmarkData
     {
@@ -118,7 +116,7 @@ public class BenchmarkOrcDecimalReader
                 throws IOException
         {
             OrcDataSource dataSource = new FileOrcDataSource(dataPath, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true);
-            OrcReader orcReader = new OrcReader(dataSource, ORC, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE));
+            OrcReader orcReader = new OrcReader(dataSource, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE));
             return orcReader.createRecordReader(
                     ImmutableMap.of(0, DECIMAL_TYPE),
                     OrcPredicate.TRUE,

@@ -26,6 +26,7 @@ import io.prestosql.SystemSessionProperties;
 import io.prestosql.block.BlockEncodingManager;
 import io.prestosql.connector.ConnectorId;
 import io.prestosql.connector.ConnectorManager;
+import io.prestosql.connector.system.AnalyzePropertiesSystemTable;
 import io.prestosql.connector.system.CatalogSystemTable;
 import io.prestosql.connector.system.ColumnPropertiesSystemTable;
 import io.prestosql.connector.system.GlobalSystemConnector;
@@ -64,7 +65,7 @@ import io.prestosql.execution.SetSessionTask;
 import io.prestosql.execution.StartTransactionTask;
 import io.prestosql.execution.TaskManagerConfig;
 import io.prestosql.execution.TaskSource;
-import io.prestosql.execution.resourceGroups.NoOpResourceGroupManager;
+import io.prestosql.execution.resourcegroups.NoOpResourceGroupManager;
 import io.prestosql.execution.scheduler.LegacyNetworkTopology;
 import io.prestosql.execution.scheduler.NodeScheduler;
 import io.prestosql.execution.scheduler.NodeSchedulerConfig;
@@ -84,7 +85,7 @@ import io.prestosql.metadata.QualifiedTablePrefix;
 import io.prestosql.metadata.SchemaPropertyManager;
 import io.prestosql.metadata.SessionPropertyManager;
 import io.prestosql.metadata.Split;
-import io.prestosql.metadata.TableLayoutHandle;
+import io.prestosql.metadata.TableHandle;
 import io.prestosql.metadata.TablePropertyManager;
 import io.prestosql.metadata.ViewDefinition;
 import io.prestosql.operator.Driver;
@@ -135,6 +136,7 @@ import io.prestosql.sql.planner.PlanFragmenter;
 import io.prestosql.sql.planner.PlanNodeIdAllocator;
 import io.prestosql.sql.planner.PlanOptimizers;
 import io.prestosql.sql.planner.SubPlan;
+import io.prestosql.sql.planner.TypeAnalyzer;
 import io.prestosql.sql.planner.optimizations.PlanOptimizer;
 import io.prestosql.sql.planner.plan.PlanNode;
 import io.prestosql.sql.planner.plan.PlanNodeId;
@@ -299,7 +301,6 @@ public class LocalQueryRunner
                 notificationExecutor);
         this.nodePartitioningManager = new NodePartitioningManager(nodeScheduler);
 
-        this.splitManager = new SplitManager(new QueryManagerConfig());
         this.blockEncodingManager = new BlockEncodingManager(typeRegistry);
         this.metadata = new MetadataManager(
                 featuresConfig,
@@ -311,8 +312,9 @@ public class LocalQueryRunner
                 new ColumnPropertyManager(),
                 new AnalyzePropertyManager(),
                 transactionManager);
+        this.splitManager = new SplitManager(new QueryManagerConfig(), metadata);
         this.planFragmenter = new PlanFragmenter(this.metadata, this.nodePartitioningManager, new QueryManagerConfig());
-        this.joinCompiler = new JoinCompiler(metadata, featuresConfig);
+        this.joinCompiler = new JoinCompiler(metadata);
         this.pageIndexerFactory = new GroupByHashPageIndexerFactory(joinCompiler);
         this.statsCalculator = createNewStatsCalculator(metadata);
         this.taskCountEstimator = new TaskCountEstimator(() -> nodeCountForStats);
@@ -349,6 +351,7 @@ public class LocalQueryRunner
                 new SchemaPropertiesSystemTable(transactionManager, metadata),
                 new TablePropertiesSystemTable(transactionManager, metadata),
                 new ColumnPropertiesSystemTable(transactionManager, metadata),
+                new AnalyzePropertiesSystemTable(transactionManager, metadata),
                 new TransactionsSystemTable(typeRegistry, transactionManager)),
                 ImmutableSet.of());
 
@@ -686,14 +689,14 @@ public class LocalQueryRunner
             System.out.println(PlanPrinter.textLogicalPlan(plan.getRoot(), plan.getTypes(), metadata.getFunctionRegistry(), plan.getStatsAndCosts(), session, 0, false));
         }
 
-        SubPlan subplan = planFragmenter.createSubPlans(session, plan, true);
+        SubPlan subplan = planFragmenter.createSubPlans(session, plan, true, WarningCollector.NOOP);
         if (!subplan.getChildren().isEmpty()) {
             throw new AssertionError("Expected subplan to have no children");
         }
 
         LocalExecutionPlanner executionPlanner = new LocalExecutionPlanner(
                 metadata,
-                sqlParser,
+                new TypeAnalyzer(sqlParser, metadata),
                 Optional.empty(),
                 pageSourceManager,
                 indexManager,
@@ -729,11 +732,11 @@ public class LocalQueryRunner
         List<TaskSource> sources = new ArrayList<>();
         long sequenceId = 0;
         for (TableScanNode tableScan : findTableScanNodes(subplan.getFragment().getRoot())) {
-            TableLayoutHandle layout = tableScan.getLayout().get();
+            TableHandle table = tableScan.getTable();
 
             SplitSource splitSource = splitManager.getSplits(
                     session,
-                    layout,
+                    table,
                     stageExecutionDescriptor.isScanGroupedExecution(tableScan.getId()) ? GROUPED_SCHEDULING : UNGROUPED_SCHEDULING);
 
             ImmutableSet.Builder<ScheduledSplit> scheduledSplits = ImmutableSet.builder();
@@ -807,7 +810,7 @@ public class LocalQueryRunner
     {
         return new PlanOptimizers(
                 metadata,
-                sqlParser,
+                new TypeAnalyzer(sqlParser, metadata),
                 featuresConfig,
                 taskManagerConfig,
                 forceSingleNode,
@@ -845,7 +848,7 @@ public class LocalQueryRunner
                 dataDefinitionTask);
         Analyzer analyzer = new Analyzer(session, metadata, sqlParser, accessControl, Optional.of(queryExplainer), preparedQuery.getParameters(), warningCollector);
 
-        LogicalPlanner logicalPlanner = new LogicalPlanner(session, optimizers, new PlanSanityChecker(true), idAllocator, metadata, sqlParser, statsCalculator, costCalculator, warningCollector);
+        LogicalPlanner logicalPlanner = new LogicalPlanner(session, optimizers, new PlanSanityChecker(true), idAllocator, metadata, new TypeAnalyzer(sqlParser, metadata), statsCalculator, costCalculator, warningCollector);
 
         Analysis analysis = analyzer.analyze(preparedQuery.getStatement());
         return logicalPlanner.plan(analysis, stage);

@@ -19,12 +19,8 @@ import com.google.common.collect.ImmutableSet;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.ConnectorOutputTableHandle;
 import io.prestosql.spi.connector.ConnectorTableHandle;
-import io.prestosql.spi.connector.ConnectorTableLayout;
-import io.prestosql.spi.connector.ConnectorTableLayoutHandle;
-import io.prestosql.spi.connector.ConnectorTableLayoutResult;
 import io.prestosql.spi.connector.ConnectorTableMetadata;
 import io.prestosql.spi.connector.ConnectorViewDefinition;
-import io.prestosql.spi.connector.Constraint;
 import io.prestosql.spi.connector.SchemaNotFoundException;
 import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.connector.SchemaTablePrefix;
@@ -54,7 +50,7 @@ public class TestMemoryMetadata
     @BeforeMethod
     public void setUp()
     {
-        metadata = new MemoryMetadata(new TestingNodeManager(), new MemoryConnectorId("test"));
+        metadata = new MemoryMetadata(new TestingNodeManager());
     }
 
     @Test
@@ -116,7 +112,7 @@ public class TestMemoryMetadata
         metadata.createTable(SESSION, new ConnectorTableMetadata(firstTableName, ImmutableList.of(), ImmutableMap.of()), false);
 
         MemoryTableHandle firstTableHandle = (MemoryTableHandle) metadata.getTableHandle(SESSION, firstTableName);
-        Long firstTableId = firstTableHandle.getTableId();
+        long firstTableId = firstTableHandle.getId();
 
         assertTrue(metadata.beginInsert(SESSION, firstTableHandle).getActiveTableIds().contains(firstTableId));
 
@@ -124,7 +120,7 @@ public class TestMemoryMetadata
         metadata.createTable(SESSION, new ConnectorTableMetadata(secondTableName, ImmutableList.of(), ImmutableMap.of()), false);
 
         MemoryTableHandle secondTableHandle = (MemoryTableHandle) metadata.getTableHandle(SESSION, secondTableName);
-        Long secondTableId = secondTableHandle.getTableId();
+        long secondTableId = secondTableHandle.getId();
 
         assertNotEquals(firstTableId, secondTableId);
         assertTrue(metadata.beginInsert(SESSION, secondTableHandle).getActiveTableIds().contains(firstTableId));
@@ -145,14 +141,6 @@ public class TestMemoryMetadata
 
         List<SchemaTableName> tableNames = metadata.listTables(SESSION, Optional.empty());
         assertTrue(tableNames.size() == 1, "Expected exactly one table");
-
-        ConnectorTableHandle tableHandle = metadata.getTableHandle(SESSION, tableName);
-        List<ConnectorTableLayoutResult> tableLayouts = metadata.getTableLayouts(SESSION, tableHandle, Constraint.alwaysTrue(), Optional.empty());
-        assertTrue(tableLayouts.size() == 1, "Expected exactly one layout.");
-        ConnectorTableLayout tableLayout = tableLayouts.get(0).getTableLayout();
-        ConnectorTableLayoutHandle tableLayoutHandle = tableLayout.getHandle();
-        assertTrue(tableLayoutHandle instanceof MemoryTableLayoutHandle);
-        assertTrue(((MemoryTableLayoutHandle) tableLayoutHandle).getDataFragments().isEmpty(), "Data fragments should be empty");
 
         metadata.finishCreateTable(SESSION, table, ImmutableList.of(), ImmutableList.of());
     }

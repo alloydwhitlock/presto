@@ -24,6 +24,7 @@ import io.prestosql.orc.metadata.CompressionKind;
 import io.prestosql.orc.metadata.ExceptionWrappingMetadataReader;
 import io.prestosql.orc.metadata.Footer;
 import io.prestosql.orc.metadata.Metadata;
+import io.prestosql.orc.metadata.OrcMetadataReader;
 import io.prestosql.orc.metadata.PostScript;
 import io.prestosql.orc.metadata.PostScript.HiveWriterVersion;
 import io.prestosql.orc.stream.OrcInputStream;
@@ -61,7 +62,6 @@ public class OrcReader
     private final OrcDataSource orcDataSource;
     private final ExceptionWrappingMetadataReader metadataReader;
     private final DataSize maxMergeDistance;
-    private final DataSize maxReadSize;
     private final DataSize tinyStripeThreshold;
     private final DataSize maxBlockSize;
     private final HiveWriterVersion hiveWriterVersion;
@@ -74,17 +74,15 @@ public class OrcReader
     private final Optional<OrcWriteValidation> writeValidation;
 
     // This is based on the Apache Hive ORC code
-    public OrcReader(OrcDataSource orcDataSource, OrcEncoding orcEncoding, DataSize maxMergeDistance, DataSize maxReadSize, DataSize tinyStripeThreshold, DataSize maxBlockSize)
+    public OrcReader(OrcDataSource orcDataSource, DataSize maxMergeDistance, DataSize tinyStripeThreshold, DataSize maxBlockSize)
             throws IOException
     {
-        this(orcDataSource, orcEncoding, maxMergeDistance, maxReadSize, tinyStripeThreshold, maxBlockSize, Optional.empty());
+        this(orcDataSource, maxMergeDistance, tinyStripeThreshold, maxBlockSize, Optional.empty());
     }
 
-    OrcReader(
+    private OrcReader(
             OrcDataSource orcDataSource,
-            OrcEncoding orcEncoding,
             DataSize maxMergeDistance,
-            DataSize maxReadSize,
             DataSize tinyStripeThreshold,
             DataSize maxBlockSize,
             Optional<OrcWriteValidation> writeValidation)
@@ -92,10 +90,8 @@ public class OrcReader
     {
         orcDataSource = wrapWithCacheIfTiny(orcDataSource, tinyStripeThreshold);
         this.orcDataSource = orcDataSource;
-        requireNonNull(orcEncoding, "orcEncoding is null");
-        this.metadataReader = new ExceptionWrappingMetadataReader(orcDataSource.getId(), orcEncoding.createMetadataReader());
+        this.metadataReader = new ExceptionWrappingMetadataReader(orcDataSource.getId(), new OrcMetadataReader());
         this.maxMergeDistance = requireNonNull(maxMergeDistance, "maxMergeDistance is null");
-        this.maxReadSize = requireNonNull(maxReadSize, "maxReadSize is null");
         this.tinyStripeThreshold = requireNonNull(tinyStripeThreshold, "tinyStripeThreshold is null");
         this.maxBlockSize = requireNonNull(maxBlockSize, "maxBlockSize is null");
 
@@ -184,7 +180,7 @@ public class OrcReader
         try (InputStream footerInputStream = new OrcInputStream(orcDataSource.getId(), footerSlice.getInput(), decompressor, newSimpleAggregatedMemoryContext(), footerSize)) {
             this.footer = metadataReader.readFooter(hiveWriterVersion, footerInputStream);
         }
-        if (footer.getTypes().size() == 0) {
+        if (footer.getTypes().isEmpty()) {
             throw new OrcCorruptionException(orcDataSource.getId(), "File has no columns");
         }
 
@@ -321,8 +317,7 @@ public class OrcReader
             OrcWriteValidation writeValidation,
             OrcDataSource input,
             List<Type> types,
-            DateTimeZone hiveStorageTimeZone,
-            OrcEncoding orcEncoding)
+            DateTimeZone hiveStorageTimeZone)
             throws OrcCorruptionException
     {
         ImmutableMap.Builder<Integer, Type> readTypes = ImmutableMap.builder();
@@ -330,7 +325,7 @@ public class OrcReader
             readTypes.put(columnIndex, types.get(columnIndex));
         }
         try {
-            OrcReader orcReader = new OrcReader(input, orcEncoding, new DataSize(1, MEGABYTE), new DataSize(8, MEGABYTE), new DataSize(8, MEGABYTE), new DataSize(16, MEGABYTE), Optional.of(writeValidation));
+            OrcReader orcReader = new OrcReader(input, new DataSize(1, MEGABYTE), new DataSize(8, MEGABYTE), new DataSize(16, MEGABYTE), Optional.of(writeValidation));
             try (OrcRecordReader orcRecordReader = orcReader.createRecordReader(readTypes.build(), OrcPredicate.TRUE, hiveStorageTimeZone, newSimpleAggregatedMemoryContext(), INITIAL_BATCH_SIZE)) {
                 while (orcRecordReader.nextBatch() >= 0) {
                     // ignored

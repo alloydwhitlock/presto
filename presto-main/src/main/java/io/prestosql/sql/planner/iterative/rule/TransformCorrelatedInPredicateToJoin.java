@@ -238,6 +238,7 @@ public class TransformCorrelatedInPredicateToJoin
                 Optional.of(joinExpression),
                 Optional.empty(),
                 Optional.empty(),
+                Optional.empty(),
                 Optional.empty());
     }
 
@@ -249,12 +250,12 @@ public class TransformCorrelatedInPredicateToJoin
                 Optional.of(condition),
                 Optional.empty(),
                 false,
-                ImmutableList.<Expression>of()); /* arguments */
+                ImmutableList.of()); /* arguments */
 
         return new AggregationNode.Aggregation(
                 countCall,
                 new Signature("count", FunctionKind.AGGREGATE, BIGINT.getTypeSignature()),
-                Optional.<Symbol>empty()); /* mask */
+                Optional.empty()); /* mask */
     }
 
     private static Expression isGreaterThan(Symbol symbol, long value)

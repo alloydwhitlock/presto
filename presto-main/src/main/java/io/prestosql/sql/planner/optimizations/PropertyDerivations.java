@@ -21,10 +21,9 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import io.prestosql.Session;
 import io.prestosql.SystemSessionProperties;
-import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.metadata.TableLayout;
-import io.prestosql.metadata.TableLayout.TablePartitioning;
+import io.prestosql.metadata.TableProperties;
+import io.prestosql.metadata.TableProperties.TablePartitioning;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConstantProperty;
 import io.prestosql.spi.connector.GroupingProperty;
@@ -32,13 +31,13 @@ import io.prestosql.spi.connector.LocalProperty;
 import io.prestosql.spi.connector.SortingProperty;
 import io.prestosql.spi.predicate.NullableValue;
 import io.prestosql.spi.type.Type;
-import io.prestosql.sql.parser.SqlParser;
 import io.prestosql.sql.planner.DomainTranslator;
 import io.prestosql.sql.planner.ExpressionInterpreter;
 import io.prestosql.sql.planner.NoOpSymbolResolver;
 import io.prestosql.sql.planner.OrderingScheme;
 import io.prestosql.sql.planner.Partitioning;
 import io.prestosql.sql.planner.Symbol;
+import io.prestosql.sql.planner.TypeAnalyzer;
 import io.prestosql.sql.planner.TypeProvider;
 import io.prestosql.sql.planner.optimizations.ActualProperties.Global;
 import io.prestosql.sql.planner.plan.AggregationNode;
@@ -95,7 +94,6 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static io.prestosql.SystemSessionProperties.planWithTableNodePartitioning;
 import static io.prestosql.spi.predicate.TupleDomain.extractFixedValues;
-import static io.prestosql.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
 import static io.prestosql.sql.planner.SystemPartitioningHandle.ARBITRARY_DISTRIBUTION;
 import static io.prestosql.sql.planner.optimizations.ActualProperties.Global.arbitraryPartition;
 import static io.prestosql.sql.planner.optimizations.ActualProperties.Global.coordinatorSingleStreamPartition;
@@ -104,7 +102,6 @@ import static io.prestosql.sql.planner.optimizations.ActualProperties.Global.sin
 import static io.prestosql.sql.planner.optimizations.ActualProperties.Global.streamPartitionedOn;
 import static io.prestosql.sql.planner.plan.ExchangeNode.Scope.LOCAL;
 import static io.prestosql.sql.planner.plan.ExchangeNode.Scope.REMOTE;
-import static java.util.Collections.emptyList;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toMap;
 
@@ -112,17 +109,17 @@ public class PropertyDerivations
 {
     private PropertyDerivations() {}
 
-    public static ActualProperties derivePropertiesRecursively(PlanNode node, Metadata metadata, Session session, TypeProvider types, SqlParser parser)
+    public static ActualProperties derivePropertiesRecursively(PlanNode node, Metadata metadata, Session session, TypeProvider types, TypeAnalyzer typeAnalyzer)
     {
         List<ActualProperties> inputProperties = node.getSources().stream()
-                .map(source -> derivePropertiesRecursively(source, metadata, session, types, parser))
+                .map(source -> derivePropertiesRecursively(source, metadata, session, types, typeAnalyzer))
                 .collect(toImmutableList());
-        return deriveProperties(node, inputProperties, metadata, session, types, parser);
+        return deriveProperties(node, inputProperties, metadata, session, types, typeAnalyzer);
     }
 
-    public static ActualProperties deriveProperties(PlanNode node, List<ActualProperties> inputProperties, Metadata metadata, Session session, TypeProvider types, SqlParser parser)
+    public static ActualProperties deriveProperties(PlanNode node, List<ActualProperties> inputProperties, Metadata metadata, Session session, TypeProvider types, TypeAnalyzer typeAnalyzer)
     {
-        ActualProperties output = node.accept(new Visitor(metadata, session, types, parser), inputProperties);
+        ActualProperties output = node.accept(new Visitor(metadata, session, types, typeAnalyzer), inputProperties);
 
         output.getNodePartitioning().ifPresent(partitioning ->
                 verify(node.getOutputSymbols().containsAll(partitioning.getColumns()), "Node-level partitioning properties contain columns not present in node's output"));
@@ -137,9 +134,9 @@ public class PropertyDerivations
         return output;
     }
 
-    public static ActualProperties streamBackdoorDeriveProperties(PlanNode node, List<ActualProperties> inputProperties, Metadata metadata, Session session, TypeProvider types, SqlParser parser)
+    public static ActualProperties streamBackdoorDeriveProperties(PlanNode node, List<ActualProperties> inputProperties, Metadata metadata, Session session, TypeProvider types, TypeAnalyzer typeAnalyzer)
     {
-        return node.accept(new Visitor(metadata, session, types, parser), inputProperties);
+        return node.accept(new Visitor(metadata, session, types, typeAnalyzer), inputProperties);
     }
 
     private static class Visitor
@@ -148,14 +145,14 @@ public class PropertyDerivations
         private final Metadata metadata;
         private final Session session;
         private final TypeProvider types;
-        private final SqlParser parser;
+        private final TypeAnalyzer typeAnalyzer;
 
-        public Visitor(Metadata metadata, Session session, TypeProvider types, SqlParser parser)
+        public Visitor(Metadata metadata, Session session, TypeProvider types, TypeAnalyzer typeAnalyzer)
         {
             this.metadata = metadata;
             this.session = session;
             this.types = types;
-            this.parser = parser;
+            this.typeAnalyzer = typeAnalyzer;
         }
 
         @Override
@@ -430,7 +427,7 @@ public class PropertyDerivations
 
                     return ActualProperties.builderFrom(buildProperties.translate(column -> filterIfMissing(node.getOutputSymbols(), column)))
                             .local(ImmutableList.of())
-                            .unordered(unordered)
+                            .unordered(true)
                             .build();
                 case FULL:
                     if (probeProperties.getNodePartitioning().isPresent()) {
@@ -446,12 +443,10 @@ public class PropertyDerivations
 
                         return ActualProperties.builder()
                                 .global(partitionedOn(Partitioning.createWithExpressions(nodePartitioning.getHandle(), coalesceExpressions.build()), Optional.empty()))
-                                .unordered(unordered)
                                 .build();
                     }
                     return ActualProperties.builder()
                             .global(probeProperties.isSingleNode() ? singleStreamPartition() : arbitraryPartition())
-                            .unordered(unordered)
                             .build();
                 default:
                     throw new UnsupportedOperationException("Unsupported join type: " + node.getType());
@@ -638,7 +633,7 @@ public class PropertyDerivations
             for (Map.Entry<Symbol, Expression> assignment : node.getAssignments().entrySet()) {
                 Expression expression = assignment.getValue();
 
-                Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypes(session, metadata, parser, types, expression, emptyList(), WarningCollector.NOOP);
+                Map<NodeRef<Expression>, Type> expressionTypes = typeAnalyzer.getTypes(session, types, expression);
                 Type type = requireNonNull(expressionTypes.get(NodeRef.of(expression)));
                 ExpressionInterpreter optimizer = ExpressionInterpreter.expressionOptimizer(expression, metadata, session, expressionTypes);
                 // TODO:
@@ -711,9 +706,7 @@ public class PropertyDerivations
         @Override
         public ActualProperties visitTableScan(TableScanNode node, List<ActualProperties> inputProperties)
         {
-            checkArgument(node.getLayout().isPresent(), "table layout has not yet been chosen");
-
-            TableLayout layout = metadata.getLayout(session, node.getLayout().get());
+            TableProperties layout = metadata.getTableProperties(session, node.getTable());
             Map<ColumnHandle, Symbol> assignments = ImmutableBiMap.copyOf(node.getAssignments()).inverse();
 
             ActualProperties.Builder properties = ActualProperties.builder();
@@ -743,7 +736,7 @@ public class PropertyDerivations
             return properties.build();
         }
 
-        private Global deriveGlobalProperties(TableLayout layout, Map<ColumnHandle, Symbol> assignments, Map<ColumnHandle, NullableValue> constants)
+        private Global deriveGlobalProperties(TableProperties layout, Map<ColumnHandle, Symbol> assignments, Map<ColumnHandle, NullableValue> constants)
         {
             Optional<List<Symbol>> streamPartitioning = layout.getStreamPartitioningColumns()
                     .flatMap(columns -> translateToNonConstantSymbols(columns, assignments, constants));
@@ -807,6 +800,8 @@ public class PropertyDerivations
         switch (joinType) {
             case INNER:
             case LEFT:
+                // Even though join might not have "spillable" property set yet
+                // it might still be set as spillable later on by AddLocalExchanges.
                 return true;
             case RIGHT:
             case FULL:
@@ -850,23 +845,29 @@ public class PropertyDerivations
         return Optional.empty();
     }
 
-    public static Optional<Symbol> rewriteExpression(Map<Symbol, Expression> assignments, Expression expression)
+    private static Optional<Symbol> rewriteExpression(Map<Symbol, Expression> assignments, Expression expression)
     {
-        checkArgument(expression instanceof CoalesceExpression, "The rewrite can only handle CoalesceExpression");
+        // Only simple coalesce expressions supported currently
+        if (!(expression instanceof CoalesceExpression)) {
+            return Optional.empty();
+        }
+
+        Set<Expression> arguments = ImmutableSet.copyOf(((CoalesceExpression) expression).getOperands());
+        if (!arguments.stream().allMatch(SymbolReference.class::isInstance)) {
+            return Optional.empty();
+        }
+
         // We are using the property that the result of coalesce from full outer join keys would not be null despite of the order
         // of the arguments. Thus we extract and compare the symbols of the CoalesceExpression as a set rather than compare the
         // CoalesceExpression directly.
         for (Map.Entry<Symbol, Expression> entry : assignments.entrySet()) {
             if (entry.getValue() instanceof CoalesceExpression) {
-                Set<Symbol> symbolsInAssignment = ((CoalesceExpression) entry.getValue()).getOperands().stream()
-                        .filter(SymbolReference.class::isInstance)
-                        .map(Symbol::from)
-                        .collect(toImmutableSet());
-                Set<Symbol> symbolInExpression = ((CoalesceExpression) expression).getOperands().stream()
-                        .filter(SymbolReference.class::isInstance)
-                        .map(Symbol::from)
-                        .collect(toImmutableSet());
-                if (symbolsInAssignment.containsAll(symbolInExpression)) {
+                Set<Expression> candidateArguments = ImmutableSet.copyOf(((CoalesceExpression) entry.getValue()).getOperands());
+                if (!candidateArguments.stream().allMatch(SymbolReference.class::isInstance)) {
+                    return Optional.empty();
+                }
+
+                if (candidateArguments.equals(arguments)) {
                     return Optional.of(entry.getKey());
                 }
             }

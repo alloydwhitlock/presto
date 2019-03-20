@@ -36,6 +36,7 @@ import static io.prestosql.spi.type.CharType.createCharType;
 import static io.prestosql.spi.type.DateType.DATE;
 import static io.prestosql.spi.type.DecimalType.createDecimalType;
 import static io.prestosql.spi.type.VarcharType.createUnboundedVarcharType;
+import static io.prestosql.type.JsonType.JSON;
 import static java.lang.String.format;
 import static java.math.RoundingMode.UNNECESSARY;
 import static java.util.function.Function.identity;
@@ -107,7 +108,7 @@ public class DataType<T>
 
     public static DataType<String> stringDataType(String insertType, Type prestoResultType)
     {
-        return dataType(insertType, prestoResultType, DataType::quote, Function.identity());
+        return dataType(insertType, prestoResultType, DataType::formatStringLiteral, Function.identity());
     }
 
     public static DataType<String> charDataType(int length)
@@ -123,7 +124,7 @@ public class DataType<T>
 
     public static DataType<String> charDataType(String insertType, int length)
     {
-        return dataType(insertType, createCharType(length), DataType::quote, input -> padEnd(input, length, ' '));
+        return dataType(insertType, createCharType(length), DataType::formatStringLiteral, input -> padEnd(input, length, ' '));
     }
 
     public static DataType<byte[]> varbinaryDataType()
@@ -150,9 +151,18 @@ public class DataType<T>
                 identity());
     }
 
-    private static String quote(String value)
+    public static DataType<String> jsonDataType()
     {
-        return "'" + value + "'";
+        return dataType(
+                "json",
+                JSON,
+                value -> "JSON " + formatStringLiteral(value),
+                identity());
+    }
+
+    public static String formatStringLiteral(String value)
+    {
+        return "'" + value.replace("'", "''") + "'";
     }
 
     /**

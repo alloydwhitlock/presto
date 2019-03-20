@@ -19,9 +19,9 @@ import com.google.inject.multibindings.Multibinder;
 import io.airlift.configuration.AbstractConfigurationAwareModule;
 import io.prestosql.plugin.hive.ForCachingHiveMetastore;
 import io.prestosql.plugin.hive.ForRecordingHiveMetastore;
-import io.prestosql.plugin.hive.HiveClientConfig;
+import io.prestosql.plugin.hive.HiveConfig;
 import io.prestosql.plugin.hive.metastore.CachingHiveMetastore;
-import io.prestosql.plugin.hive.metastore.ExtendedHiveMetastore;
+import io.prestosql.plugin.hive.metastore.HiveMetastore;
 import io.prestosql.plugin.hive.metastore.RecordingHiveMetastore;
 import io.prestosql.plugin.hive.metastore.WriteHiveMetastoreRecordingProcedure;
 import io.prestosql.spi.procedure.Procedure;
@@ -37,17 +37,18 @@ public class ThriftMetastoreModule
     protected void setup(Binder binder)
     {
         binder.bind(HiveMetastoreClientFactory.class).in(Scopes.SINGLETON);
-        binder.bind(HiveCluster.class).to(StaticHiveCluster.class).in(Scopes.SINGLETON);
+        binder.bind(MetastoreLocator.class).to(StaticMetastoreLocator.class).in(Scopes.SINGLETON);
         configBinder(binder).bindConfig(StaticMetastoreConfig.class);
+        configBinder(binder).bindConfig(ThriftHiveMetastoreConfig.class);
 
-        binder.bind(HiveMetastore.class).to(ThriftHiveMetastore.class).in(Scopes.SINGLETON);
+        binder.bind(ThriftMetastore.class).to(ThriftHiveMetastore.class).in(Scopes.SINGLETON);
 
-        if (buildConfigObject(HiveClientConfig.class).getRecordingPath() != null) {
-            binder.bind(ExtendedHiveMetastore.class)
+        if (buildConfigObject(HiveConfig.class).getRecordingPath() != null) {
+            binder.bind(HiveMetastore.class)
                     .annotatedWith(ForRecordingHiveMetastore.class)
                     .to(BridgingHiveMetastore.class)
                     .in(Scopes.SINGLETON);
-            binder.bind(ExtendedHiveMetastore.class)
+            binder.bind(HiveMetastore.class)
                     .annotatedWith(ForCachingHiveMetastore.class)
                     .to(RecordingHiveMetastore.class)
                     .in(Scopes.SINGLETON);
@@ -58,16 +59,16 @@ public class ThriftMetastoreModule
             procedures.addBinding().toProvider(WriteHiveMetastoreRecordingProcedure.class).in(Scopes.SINGLETON);
         }
         else {
-            binder.bind(ExtendedHiveMetastore.class)
+            binder.bind(HiveMetastore.class)
                     .annotatedWith(ForCachingHiveMetastore.class)
                     .to(BridgingHiveMetastore.class)
                     .in(Scopes.SINGLETON);
         }
 
-        binder.bind(ExtendedHiveMetastore.class).to(CachingHiveMetastore.class).in(Scopes.SINGLETON);
-        newExporter(binder).export(HiveMetastore.class)
+        binder.bind(HiveMetastore.class).to(CachingHiveMetastore.class).in(Scopes.SINGLETON);
+        newExporter(binder).export(ThriftMetastore.class)
                 .as(generator -> generator.generatedNameOf(ThriftHiveMetastore.class));
-        newExporter(binder).export(ExtendedHiveMetastore.class)
+        newExporter(binder).export(HiveMetastore.class)
                 .as(generator -> generator.generatedNameOf(CachingHiveMetastore.class));
     }
 }

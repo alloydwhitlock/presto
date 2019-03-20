@@ -14,12 +14,12 @@
 package io.prestosql.tests.jdbc;
 
 import io.airlift.log.Logger;
-import io.prestodb.tempto.ProductTest;
-import io.prestodb.tempto.Requirement;
-import io.prestodb.tempto.RequirementsProvider;
-import io.prestodb.tempto.Requires;
-import io.prestodb.tempto.configuration.Configuration;
-import io.prestodb.tempto.query.QueryResult;
+import io.prestosql.tempto.ProductTest;
+import io.prestosql.tempto.Requirement;
+import io.prestosql.tempto.RequirementsProvider;
+import io.prestosql.tempto.Requires;
+import io.prestosql.tempto.configuration.Configuration;
+import io.prestosql.tempto.query.QueryResult;
 import org.testng.annotations.Test;
 
 import java.math.BigDecimal;
@@ -30,19 +30,20 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
 
-import static io.prestodb.tempto.assertions.QueryAssert.Row.row;
-import static io.prestodb.tempto.assertions.QueryAssert.assertThat;
-import static io.prestodb.tempto.fulfillment.table.MutableTableRequirement.State.CREATED;
-import static io.prestodb.tempto.fulfillment.table.MutableTablesState.mutableTablesState;
-import static io.prestodb.tempto.fulfillment.table.TableRequirements.immutableTable;
-import static io.prestodb.tempto.fulfillment.table.TableRequirements.mutableTable;
-import static io.prestodb.tempto.query.QueryExecutor.defaultQueryExecutor;
-import static io.prestodb.tempto.query.QueryExecutor.param;
-import static io.prestodb.tempto.query.QueryExecutor.query;
+import static io.prestosql.tempto.assertions.QueryAssert.Row.row;
+import static io.prestosql.tempto.assertions.QueryAssert.assertThat;
+import static io.prestosql.tempto.fulfillment.table.MutableTableRequirement.State.CREATED;
+import static io.prestosql.tempto.fulfillment.table.MutableTablesState.mutableTablesState;
+import static io.prestosql.tempto.fulfillment.table.TableRequirements.immutableTable;
+import static io.prestosql.tempto.fulfillment.table.TableRequirements.mutableTable;
+import static io.prestosql.tempto.query.QueryExecutor.defaultQueryExecutor;
+import static io.prestosql.tempto.query.QueryExecutor.param;
+import static io.prestosql.tempto.query.QueryExecutor.query;
 import static io.prestosql.tests.TestGroups.JDBC;
 import static io.prestosql.tests.TestGroups.SIMBA_JDBC;
 import static io.prestosql.tests.hive.AllSimpleTypesTableDefinitions.ALL_HIVE_SIMPLE_TYPES_TEXTFILE;
 import static io.prestosql.tests.utils.JdbcDriverUtils.usingTeradataJdbcDriver;
+import static java.lang.String.format;
 import static java.sql.JDBCType.BIGINT;
 import static java.sql.JDBCType.BOOLEAN;
 import static java.sql.JDBCType.CHAR;
@@ -137,8 +138,8 @@ public class PreparedStatements
     {
         if (usingTeradataJdbcDriver(connection())) {
             String tableNameInDatabase = mutableTablesState().get(TABLE_NAME_MUTABLE).getNameInDatabase();
-            String insertSqlWithTable = String.format(INSERT_SQL, tableNameInDatabase);
-            String selectSqlWithTable = String.format(SELECT_STAR_SQL, tableNameInDatabase);
+            String insertSqlWithTable = format(INSERT_SQL, tableNameInDatabase);
+            String selectSqlWithTable = format(SELECT_STAR_SQL, tableNameInDatabase);
 
             defaultQueryExecutor().executeQuery(
                     insertSqlWithTable,
@@ -175,8 +176,8 @@ public class PreparedStatements
     {
         if (usingTeradataJdbcDriver(connection())) {
             String tableNameInDatabase = mutableTablesState().get(TABLE_NAME_MUTABLE).getNameInDatabase();
-            String insertSqlWithTable = String.format(INSERT_SQL, tableNameInDatabase);
-            String selectSqlWithTable = String.format(SELECT_STAR_SQL, tableNameInDatabase);
+            String insertSqlWithTable = format(INSERT_SQL, tableNameInDatabase);
+            String selectSqlWithTable = format(SELECT_STAR_SQL, tableNameInDatabase);
 
             query(
                     insertSqlWithTable,
@@ -281,8 +282,8 @@ public class PreparedStatements
     {
         if (usingTeradataJdbcDriver(connection())) {
             String tableNameInDatabase = mutableTablesState().get(TABLE_NAME_MUTABLE).getNameInDatabase();
-            String insertSqlWithTable = "PREPARE ps1 from " + String.format(INSERT_SQL, tableNameInDatabase);
-            String selectSqlWithTable = String.format(SELECT_STAR_SQL, tableNameInDatabase);
+            String insertSqlWithTable = "PREPARE ps1 from " + format(INSERT_SQL, tableNameInDatabase);
+            String selectSqlWithTable = format(SELECT_STAR_SQL, tableNameInDatabase);
             String executeSql = "EXECUTE ps1 using ";
 
             Statement statement = connection().createStatement();
@@ -387,8 +388,8 @@ public class PreparedStatements
     {
         if (usingTeradataJdbcDriver(connection())) {
             String tableNameInDatabase = mutableTablesState().get(TABLE_NAME_MUTABLE).getNameInDatabase();
-            String insertSqlWithTable = "PREPARE ps1 from " + String.format(INSERT_SQL, tableNameInDatabase);
-            String selectSqlWithTable = String.format(SELECT_STAR_SQL, tableNameInDatabase);
+            String insertSqlWithTable = "PREPARE ps1 from " + format(INSERT_SQL, tableNameInDatabase);
+            String selectSqlWithTable = format(SELECT_STAR_SQL, tableNameInDatabase);
             String executeSql = "EXECUTE ps1 using ";
 
             Statement statement = connection().createStatement();

@@ -24,7 +24,6 @@ import io.prestosql.operator.aggregation.InternalAggregationFunction;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spiller.SpillerFactory;
-import io.prestosql.sql.analyzer.FeaturesConfig;
 import io.prestosql.sql.gen.JoinCompiler;
 import io.prestosql.sql.planner.plan.AggregationNode;
 import io.prestosql.sql.planner.plan.PlanNodeId;
@@ -37,6 +36,7 @@ import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
+import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.annotations.Warmup;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
@@ -133,6 +133,13 @@ public class BenchmarkHashAndStreamingAggregationOperators
             }
         }
 
+        @TearDown
+        public void cleanup()
+        {
+            executor.shutdownNow();
+            scheduledExecutor.shutdownNow();
+        }
+
         private OperatorFactory createStreamingAggregationOperatorFactory()
         {
             return new StreamingAggregationOperatorFactory(
@@ -144,12 +151,12 @@ public class BenchmarkHashAndStreamingAggregationOperators
                     AggregationNode.Step.SINGLE,
                     ImmutableList.of(COUNT.bind(ImmutableList.of(0), Optional.empty()),
                             LONG_SUM.bind(ImmutableList.of(1), Optional.empty())),
-                    new JoinCompiler(MetadataManager.createTestMetadataManager(), new FeaturesConfig()));
+                    new JoinCompiler(MetadataManager.createTestMetadataManager()));
         }
 
         private OperatorFactory createHashAggregationOperatorFactory(Optional<Integer> hashChannel)
         {
-            JoinCompiler joinCompiler = new JoinCompiler(MetadataManager.createTestMetadataManager(), new FeaturesConfig());
+            JoinCompiler joinCompiler = new JoinCompiler(MetadataManager.createTestMetadataManager());
             SpillerFactory spillerFactory = (types, localSpillContext, aggregatedMemoryContext) -> null;
 
             return new HashAggregationOperatorFactory(
@@ -258,6 +265,8 @@ public class BenchmarkHashAndStreamingAggregationOperators
 
         List<Page> outputPages = benchmark(context);
         assertEquals(TOTAL_PAGES * ROWS_PER_PAGE / rowsPerGroup, outputPages.stream().mapToInt(Page::getPositionCount).sum());
+
+        context.cleanup();
     }
 
     public static void main(String[] args)

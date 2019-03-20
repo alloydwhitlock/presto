@@ -17,7 +17,7 @@ import io.airlift.concurrent.BoundedExecutor;
 import io.airlift.json.JsonCodec;
 import io.airlift.log.Logger;
 import io.prestosql.plugin.hive.metastore.CachingHiveMetastore;
-import io.prestosql.plugin.hive.metastore.ExtendedHiveMetastore;
+import io.prestosql.plugin.hive.metastore.HiveMetastore;
 import io.prestosql.plugin.hive.metastore.SemiTransactionalHiveMetastore;
 import io.prestosql.plugin.hive.statistics.MetastoreHiveStatisticsProvider;
 import io.prestosql.spi.type.TypeManager;
@@ -42,13 +42,12 @@ public class HiveMetadataFactory
     private final boolean createsOfNonManagedTablesEnabled;
     private final long perTransactionCacheMaximumSize;
     private final int maxPartitions;
-    private final ExtendedHiveMetastore metastore;
+    private final HiveMetastore metastore;
     private final HdfsEnvironment hdfsEnvironment;
     private final HivePartitionManager partitionManager;
     private final DateTimeZone timeZone;
     private final TypeManager typeManager;
     private final LocationService locationService;
-    private final TableParameterCodec tableParameterCodec;
     private final JsonCodec<PartitionUpdate> partitionUpdateCodec;
     private final BoundedExecutor renameExecution;
     private final TypeTranslator typeTranslator;
@@ -57,14 +56,13 @@ public class HiveMetadataFactory
     @Inject
     @SuppressWarnings("deprecation")
     public HiveMetadataFactory(
-            HiveClientConfig hiveClientConfig,
-            ExtendedHiveMetastore metastore,
+            HiveConfig hiveConfig,
+            HiveMetastore metastore,
             HdfsEnvironment hdfsEnvironment,
             HivePartitionManager partitionManager,
-            @ForHiveClient ExecutorService executorService,
+            @ForHive ExecutorService executorService,
             TypeManager typeManager,
             LocationService locationService,
-            TableParameterCodec tableParameterCodec,
             JsonCodec<PartitionUpdate> partitionUpdateCodec,
             TypeTranslator typeTranslator,
             NodeVersion nodeVersion)
@@ -73,18 +71,17 @@ public class HiveMetadataFactory
                 metastore,
                 hdfsEnvironment,
                 partitionManager,
-                hiveClientConfig.getDateTimeZone(),
-                hiveClientConfig.getMaxConcurrentFileRenames(),
-                hiveClientConfig.getAllowCorruptWritesForTesting(),
-                hiveClientConfig.isSkipDeletionForAlter(),
-                hiveClientConfig.isSkipTargetCleanupOnRollback(),
-                hiveClientConfig.getWritesToNonManagedTablesEnabled(),
-                hiveClientConfig.getCreatesOfNonManagedTablesEnabled(),
-                hiveClientConfig.getPerTransactionMetastoreCacheMaximumSize(),
-                hiveClientConfig.getMaxPartitionsPerScan(),
+                hiveConfig.getDateTimeZone(),
+                hiveConfig.getMaxConcurrentFileRenames(),
+                hiveConfig.getAllowCorruptWritesForTesting(),
+                hiveConfig.isSkipDeletionForAlter(),
+                hiveConfig.isSkipTargetCleanupOnRollback(),
+                hiveConfig.getWritesToNonManagedTablesEnabled(),
+                hiveConfig.getCreatesOfNonManagedTablesEnabled(),
+                hiveConfig.getPerTransactionMetastoreCacheMaximumSize(),
+                hiveConfig.getMaxPartitionsPerScan(),
                 typeManager,
                 locationService,
-                tableParameterCodec,
                 partitionUpdateCodec,
                 executorService,
                 typeTranslator,
@@ -92,7 +89,7 @@ public class HiveMetadataFactory
     }
 
     public HiveMetadataFactory(
-            ExtendedHiveMetastore metastore,
+            HiveMetastore metastore,
             HdfsEnvironment hdfsEnvironment,
             HivePartitionManager partitionManager,
             DateTimeZone timeZone,
@@ -106,7 +103,6 @@ public class HiveMetadataFactory
             int maxPartitions,
             TypeManager typeManager,
             LocationService locationService,
-            TableParameterCodec tableParameterCodec,
             JsonCodec<PartitionUpdate> partitionUpdateCodec,
             ExecutorService executorService,
             TypeTranslator typeTranslator,
@@ -125,7 +121,6 @@ public class HiveMetadataFactory
         this.timeZone = requireNonNull(timeZone, "timeZone is null");
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.locationService = requireNonNull(locationService, "locationService is null");
-        this.tableParameterCodec = requireNonNull(tableParameterCodec, "tableParameterCodec is null");
         this.partitionUpdateCodec = requireNonNull(partitionUpdateCodec, "partitionUpdateCodec is null");
         this.typeTranslator = requireNonNull(typeTranslator, "typeTranslator is null");
         this.prestoVersion = requireNonNull(prestoVersion, "prestoVersion is null");
@@ -161,7 +156,6 @@ public class HiveMetadataFactory
                 createsOfNonManagedTablesEnabled,
                 typeManager,
                 locationService,
-                tableParameterCodec,
                 partitionUpdateCodec,
                 typeTranslator,
                 prestoVersion,

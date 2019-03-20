@@ -13,8 +13,8 @@
  */
 package io.prestosql.tests.jdbc;
 
-import io.prestodb.tempto.Requires;
-import io.prestodb.tempto.fulfillment.table.hive.tpch.ImmutableTpchTablesRequirements.ImmutableNationTable;
+import io.prestosql.tempto.Requires;
+import io.prestosql.tempto.fulfillment.table.hive.tpch.ImmutableTpchTablesRequirements.ImmutableNationTable;
 import org.testng.annotations.Test;
 
 import java.sql.Connection;
@@ -22,7 +22,7 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
 
-import static io.prestodb.tempto.assertions.QueryAssert.assertThat;
+import static io.prestosql.tempto.assertions.QueryAssert.assertThat;
 import static io.prestosql.tests.ImmutableLdapObjectDefinitions.CHILD_GROUP_USER;
 import static io.prestosql.tests.ImmutableLdapObjectDefinitions.ORPHAN_USER;
 import static io.prestosql.tests.ImmutableLdapObjectDefinitions.PARENT_GROUP_USER;
@@ -30,6 +30,7 @@ import static io.prestosql.tests.TestGroups.LDAP;
 import static io.prestosql.tests.TestGroups.PROFILE_SPECIFIC_TESTS;
 import static io.prestosql.tests.TestGroups.SIMBA_JDBC;
 import static io.prestosql.tests.TpchTableResults.PRESTO_NATION_RESULT;
+import static java.lang.String.format;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.fail;
 
@@ -124,7 +125,7 @@ public class LdapSimbaJdbcTests
     public void shouldFailForIncorrectTrustStore()
     {
         try {
-            String url = String.format(JDBC_URL_FORMAT, prestoServer(), ldapTruststorePath, "wrong_password");
+            String url = format(JDBC_URL_FORMAT, prestoServer(), ldapTruststorePath, "wrong_password");
             Connection connection = DriverManager.getConnection(url, ldapUserName, ldapUserPassword);
             Statement statement = connection.createStatement();
             statement.executeQuery(NATION_SELECT_ALL_QUERY);

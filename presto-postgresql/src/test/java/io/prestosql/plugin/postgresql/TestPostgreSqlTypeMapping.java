@@ -42,18 +42,23 @@ import static io.prestosql.spi.type.TimeZoneKey.UTC_KEY;
 import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
 import static io.prestosql.tests.datatype.DataType.bigintDataType;
 import static io.prestosql.tests.datatype.DataType.booleanDataType;
+import static io.prestosql.tests.datatype.DataType.dataType;
 import static io.prestosql.tests.datatype.DataType.dateDataType;
 import static io.prestosql.tests.datatype.DataType.decimalDataType;
 import static io.prestosql.tests.datatype.DataType.doubleDataType;
+import static io.prestosql.tests.datatype.DataType.formatStringLiteral;
 import static io.prestosql.tests.datatype.DataType.integerDataType;
+import static io.prestosql.tests.datatype.DataType.jsonDataType;
 import static io.prestosql.tests.datatype.DataType.realDataType;
 import static io.prestosql.tests.datatype.DataType.smallintDataType;
 import static io.prestosql.tests.datatype.DataType.varbinaryDataType;
 import static io.prestosql.tests.datatype.DataType.varcharDataType;
+import static io.prestosql.type.JsonType.JSON;
 import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_16LE;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Collections.emptyList;
+import static java.util.function.Function.identity;
 
 @Test
 public class TestPostgreSqlTypeMapping
@@ -262,10 +267,61 @@ public class TestPostgreSqlTypeMapping
     }
 
     @Test
+    public void testEnum()
+    {
+        JdbcSqlExecutor jdbcSqlExecutor = new JdbcSqlExecutor(postgreSqlServer.getJdbcUrl());
+        jdbcSqlExecutor.execute("CREATE TYPE enum_t AS ENUM ('a','b','c')");
+        jdbcSqlExecutor.execute("CREATE TABLE tpch.test_enum(id int, enum_column enum_t)");
+        jdbcSqlExecutor.execute("INSERT INTO tpch.test_enum(id,enum_column) values (1,'a'::enum_t),(2,'b'::enum_t)");
+        try {
+            assertQuery(
+                    "SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'tpch' AND table_name = 'test_enum'",
+                    "VALUES ('id','integer'),('enum_column','varchar')");
+            assertQuery("SELECT * FROM tpch.test_enum", "VALUES (1,'a'),(2,'b')");
+            assertQuery("SELECT * FROM tpch.test_enum WHERE enum_column='a'", "VALUES (1,'a')");
+        }
+        finally {
+            jdbcSqlExecutor.execute("DROP TABLE tpch.test_enum");
+            jdbcSqlExecutor.execute("DROP TYPE enum_t");
+        }
+    }
+
+    @Test
     public void testTimestamp()
     {
         // TODO timestamp is not correctly read (see comment in StandardColumnMappings.timestampColumnMapping)
         // testing this is hard because of https://github.com/prestodb/presto/issues/7122
+    }
+
+    @Test
+    public void testJson()
+    {
+        jsonTestCases(jsonDataType())
+                .execute(getQueryRunner(), prestoCreateAsSelect("presto_test_json"));
+        jsonTestCases(jsonDataType())
+                .execute(getQueryRunner(), postgresCreateAndInsert("tpch.postgresql_test_json"));
+    }
+
+    @Test
+    public void testJsonb()
+    {
+        jsonTestCases(jsonbDataType())
+                .execute(getQueryRunner(), postgresCreateAndInsert("tpch.postgresql_test_jsonb"));
+    }
+
+    private DataTypeTest jsonTestCases(DataType<String> jsonDataType)
+    {
+        return DataTypeTest.create()
+                .addRoundTrip(jsonDataType, "{}")
+                .addRoundTrip(jsonDataType, null)
+                .addRoundTrip(jsonDataType, "null")
+                .addRoundTrip(jsonDataType, "123.4")
+                .addRoundTrip(jsonDataType, "\"abc\"")
+                .addRoundTrip(jsonDataType, "\"text with \\\" quotations and ' apostrophes\"")
+                .addRoundTrip(jsonDataType, "\"\"")
+                .addRoundTrip(jsonDataType, "{\"a\":1,\"b\":2}")
+                .addRoundTrip(jsonDataType, "{\"a\":[1,2,3],\"b\":{\"aa\":11,\"bb\":[{\"a\":1,\"b\":2},{\"a\":0}]}}")
+                .addRoundTrip(jsonDataType, "[]");
     }
 
     private void testUnsupportedDataType(String databaseDataType)
@@ -274,7 +330,7 @@ public class TestPostgreSqlTypeMapping
         jdbcSqlExecutor.execute(format("CREATE TABLE tpch.test_unsupported_data_type(key varchar(5), unsupported_column %s)", databaseDataType));
         try {
             assertQuery(
-                    "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'tpch' AND TABLE_NAME = 'test_unsupported_data_type'",
+                    "SELECT column_name FROM information_schema.columns WHERE table_schema = 'tpch' AND table_name = 'test_unsupported_data_type'",
                     "VALUES 'key'"); // no 'unsupported_column'
         }
         finally {
@@ -282,13 +338,22 @@ public class TestPostgreSqlTypeMapping
         }
     }
 
+    public static DataType<String> jsonbDataType()
+    {
+        return dataType(
+                "jsonb",
+                JSON,
+                value -> "JSON " + formatStringLiteral(value),
+                identity());
+    }
+
     private static DataType<byte[]> byteaDataType()
     {
-        return DataType.dataType(
+        return dataType(
                 "bytea",
                 VARBINARY,
                 bytes -> format("bytea E'\\\\x%s'", base16().encode(bytes)),
-                Function.identity());
+                identity());
     }
 
     private DataSetup prestoCreateAsSelect(String tableNamePrefix)

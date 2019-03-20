@@ -19,7 +19,7 @@ import com.google.common.collect.ImmutableSet;
 import io.airlift.units.Duration;
 import io.prestosql.plugin.hive.HiveBasicStatistics;
 import io.prestosql.plugin.hive.HiveBucketProperty;
-import io.prestosql.plugin.hive.HiveClientConfig;
+import io.prestosql.plugin.hive.HiveConfig;
 import io.prestosql.plugin.hive.HiveType;
 import io.prestosql.plugin.hive.PartitionStatistics;
 import io.prestosql.plugin.hive.metastore.HivePrivilegeInfo.HivePrivilege;
@@ -98,31 +98,31 @@ public class TestRecordingHiveMetastore
                     OptionalLong.of(1235),
                     OptionalLong.of(1),
                     OptionalLong.of(8))));
-    private static final HivePrivilegeInfo PRIVILEGE_INFO = new HivePrivilegeInfo(HivePrivilege.SELECT, true, new PrestoPrincipal(PrincipalType.USER, "grantor"), new PrestoPrincipal(PrincipalType.USER, "grantee"));
+    private static final HivePrivilegeInfo PRIVILEGE_INFO = new HivePrivilegeInfo(HivePrivilege.SELECT, true, new HivePrincipal(PrincipalType.USER, "grantor"), new HivePrincipal(PrincipalType.USER, "grantee"));
     private static final RoleGrant ROLE_GRANT = new RoleGrant(new PrestoPrincipal(USER, "grantee"), "role", true);
 
     @Test
     public void testRecordingHiveMetastore()
             throws IOException
     {
-        HiveClientConfig recordingHiveClientConfig = new HiveClientConfig()
+        HiveConfig recordingHiveConfig = new HiveConfig()
                 .setRecordingPath(File.createTempFile("recording_test", "json").getAbsolutePath())
                 .setRecordingDuration(new Duration(10, TimeUnit.MINUTES));
 
-        RecordingHiveMetastore recordingHiveMetastore = new RecordingHiveMetastore(new TestingHiveMetastore(), recordingHiveClientConfig);
+        RecordingHiveMetastore recordingHiveMetastore = new RecordingHiveMetastore(new TestingHiveMetastore(), recordingHiveConfig);
         validateMetadata(recordingHiveMetastore);
         recordingHiveMetastore.dropDatabase("other_database");
         recordingHiveMetastore.writeRecording();
 
-        HiveClientConfig replayingHiveClientConfig = recordingHiveClientConfig
+        HiveConfig replayingHiveConfig = recordingHiveConfig
                 .setReplay(true);
 
-        recordingHiveMetastore = new RecordingHiveMetastore(new UnimplementedHiveMetastore(), replayingHiveClientConfig);
+        recordingHiveMetastore = new RecordingHiveMetastore(new UnimplementedHiveMetastore(), replayingHiveConfig);
         recordingHiveMetastore.loadRecording();
         validateMetadata(recordingHiveMetastore);
     }
 
-    private void validateMetadata(ExtendedHiveMetastore hiveMetastore)
+    private void validateMetadata(HiveMetastore hiveMetastore)
     {
         assertEquals(hiveMetastore.getDatabase("database"), Optional.of(DATABASE));
         assertEquals(hiveMetastore.getAllDatabases(), ImmutableList.of("database"));
@@ -136,9 +136,9 @@ public class TestRecordingHiveMetastore
         assertEquals(hiveMetastore.getPartitionNames("database", "table"), Optional.of(ImmutableList.of("value")));
         assertEquals(hiveMetastore.getPartitionNamesByParts("database", "table", ImmutableList.of("value")), Optional.of(ImmutableList.of("value")));
         assertEquals(hiveMetastore.getPartitionsByNames("database", "table", ImmutableList.of("value")), ImmutableMap.of("value", Optional.of(PARTITION)));
-        assertEquals(hiveMetastore.listTablePrivileges("database", "table", new PrestoPrincipal(USER, "user")), ImmutableSet.of(PRIVILEGE_INFO));
+        assertEquals(hiveMetastore.listTablePrivileges("database", "table", new HivePrincipal(USER, "user")), ImmutableSet.of(PRIVILEGE_INFO));
         assertEquals(hiveMetastore.listRoles(), ImmutableSet.of("role"));
-        assertEquals(hiveMetastore.listRoleGrants(new PrestoPrincipal(USER, "user")), ImmutableSet.of(ROLE_GRANT));
+        assertEquals(hiveMetastore.listRoleGrants(new HivePrincipal(USER, "user")), ImmutableSet.of(ROLE_GRANT));
     }
 
     private static class TestingHiveMetastore
@@ -263,7 +263,7 @@ public class TestRecordingHiveMetastore
         }
 
         @Override
-        public Set<HivePrivilegeInfo> listTablePrivileges(String database, String table, PrestoPrincipal prestoPrincipal)
+        public Set<HivePrivilegeInfo> listTablePrivileges(String database, String table, HivePrincipal prestoPrincipal)
         {
             if (database.equals("database") && table.equals("table") && prestoPrincipal.getType() == USER && prestoPrincipal.getName().equals("user")) {
                 return ImmutableSet.of(PRIVILEGE_INFO);
@@ -279,7 +279,7 @@ public class TestRecordingHiveMetastore
         }
 
         @Override
-        public Set<RoleGrant> listRoleGrants(PrestoPrincipal principal)
+        public Set<RoleGrant> listRoleGrants(HivePrincipal principal)
         {
             return ImmutableSet.of(ROLE_GRANT);
         }

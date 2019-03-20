@@ -45,7 +45,6 @@ import java.util.stream.Stream;
 import static io.airlift.testing.Assertions.assertGreaterThanOrEqual;
 import static io.airlift.testing.Assertions.assertInstanceOf;
 import static io.prestosql.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
-import static io.prestosql.orc.OrcEncoding.ORC;
 import static io.prestosql.orc.OrcReader.INITIAL_BATCH_SIZE;
 import static io.prestosql.orc.OrcRecordReader.LinearProbeRangeFinder.createTinyStripesRangeFinder;
 import static io.prestosql.orc.OrcRecordReader.wrapWithCacheIfTinyStripes;
@@ -55,6 +54,7 @@ import static io.prestosql.orc.OrcTester.writeOrcFileColumnHive;
 import static io.prestosql.orc.metadata.CompressionKind.NONE;
 import static io.prestosql.orc.metadata.CompressionKind.ZLIB;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
+import static java.lang.String.format;
 import static org.apache.hadoop.hive.serde2.objectinspector.primitive.PrimitiveObjectInspectorFactory.javaStringObjectInspector;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
@@ -181,20 +181,20 @@ public class TestCachingOrcDataSource
         // tiny file
         TestingOrcDataSource orcDataSource = new TestingOrcDataSource(
                 new FileOrcDataSource(tempFile.getFile(), new DataSize(1, Unit.MEGABYTE), new DataSize(1, Unit.MEGABYTE), new DataSize(1, Unit.MEGABYTE), true));
-        doIntegration(orcDataSource, new DataSize(1, Unit.MEGABYTE), new DataSize(1, Unit.MEGABYTE), new DataSize(1, Unit.MEGABYTE));
+        doIntegration(orcDataSource, new DataSize(1, Unit.MEGABYTE), new DataSize(1, Unit.MEGABYTE));
         assertEquals(orcDataSource.getReadCount(), 1); // read entire file at once
 
         // tiny stripes
         orcDataSource = new TestingOrcDataSource(
                 new FileOrcDataSource(tempFile.getFile(), new DataSize(1, Unit.MEGABYTE), new DataSize(1, Unit.MEGABYTE), new DataSize(1, Unit.MEGABYTE), true));
-        doIntegration(orcDataSource, new DataSize(400, Unit.KILOBYTE), new DataSize(400, Unit.KILOBYTE), new DataSize(400, Unit.KILOBYTE));
+        doIntegration(orcDataSource, new DataSize(400, Unit.KILOBYTE), new DataSize(400, Unit.KILOBYTE));
         assertEquals(orcDataSource.getReadCount(), 3); // footer, first few stripes, last few stripes
     }
 
-    public void doIntegration(TestingOrcDataSource orcDataSource, DataSize maxMergeDistance, DataSize maxReadSize, DataSize tinyStripeThreshold)
+    private void doIntegration(TestingOrcDataSource orcDataSource, DataSize maxMergeDistance, DataSize tinyStripeThreshold)
             throws IOException
     {
-        OrcReader orcReader = new OrcReader(orcDataSource, ORC, maxMergeDistance, maxReadSize, tinyStripeThreshold, new DataSize(1, Unit.MEGABYTE));
+        OrcReader orcReader = new OrcReader(orcDataSource, maxMergeDistance, tinyStripeThreshold, new DataSize(1, Unit.MEGABYTE));
         // 1 for reading file footer
         assertEquals(orcDataSource.getReadCount(), 1);
         List<StripeInformation> stripes = orcReader.getFooter().getStripes();
@@ -221,12 +221,12 @@ public class TestCachingOrcDataSource
         assertEquals(positionCount, POSITION_COUNT);
     }
 
-    public static <T, U extends T> void assertNotInstanceOf(T actual, Class<U> expectedType)
+    private static <T, U extends T> void assertNotInstanceOf(T actual, Class<U> expectedType)
     {
         assertNotNull(actual, "actual is null");
         assertNotNull(expectedType, "expectedType is null");
         if (expectedType.isInstance(actual)) {
-            fail(String.format("expected:<%s> to not be an instance of <%s>", actual, expectedType.getName()));
+            fail(format("expected:<%s> to not be an instance of <%s>", actual, expectedType.getName()));
         }
     }
 

@@ -33,7 +33,6 @@ import io.prestosql.spi.type.DecimalType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.VarcharType;
 
-import javax.annotation.Nullable;
 import javax.annotation.PreDestroy;
 
 import java.sql.Connection;
@@ -81,6 +80,7 @@ import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
 import static io.prestosql.spi.type.Varchars.isVarcharType;
 import static java.lang.String.format;
 import static java.lang.String.join;
+import static java.sql.DatabaseMetaData.columnNoNulls;
 import static java.util.Collections.nCopies;
 import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
@@ -102,13 +102,11 @@ public class BaseJdbcClient
             .put(DATE, WriteMapping.longMapping("date", dateWriteFunction()))
             .build();
 
-    protected final String connectorId;
     protected final ConnectionFactory connectionFactory;
     protected final String identifierQuote;
 
-    public BaseJdbcClient(JdbcConnectorId connectorId, BaseJdbcConfig config, String identifierQuote, ConnectionFactory connectionFactory)
+    public BaseJdbcClient(BaseJdbcConfig config, String identifierQuote, ConnectionFactory connectionFactory)
     {
-        this.connectorId = requireNonNull(connectorId, "connectorId is null").toString();
         requireNonNull(config, "config is null"); // currently unused, retained as parameter for future extensions
         this.identifierQuote = requireNonNull(identifierQuote, "identifierQuote is null");
         this.connectionFactory = requireNonNull(connectionFactory, "connectionFactory is null");
@@ -122,9 +120,9 @@ public class BaseJdbcClient
     }
 
     @Override
-    public Set<String> getSchemaNames()
+    public Set<String> getSchemaNames(JdbcIdentity identity)
     {
-        try (Connection connection = connectionFactory.openConnection();
+        try (Connection connection = connectionFactory.openConnection(identity);
                 ResultSet resultSet = connection.getMetaData().getSchemas()) {
             ImmutableSet.Builder<String> schemaNames = ImmutableSet.builder();
             while (resultSet.next()) {
@@ -142,14 +140,14 @@ public class BaseJdbcClient
     }
 
     @Override
-    public List<SchemaTableName> getTableNames(@Nullable String schema)
+    public List<SchemaTableName> getTableNames(JdbcIdentity identity, Optional<String> schema)
     {
-        try (Connection connection = connectionFactory.openConnection()) {
+        try (Connection connection = connectionFactory.openConnection(identity)) {
             DatabaseMetaData metadata = connection.getMetaData();
-            if (metadata.storesUpperCaseIdentifiers() && (schema != null)) {
-                schema = schema.toUpperCase(ENGLISH);
+            if (metadata.storesUpperCaseIdentifiers()) {
+                schema = schema.map(schemaName -> schemaName.toUpperCase(ENGLISH));
             }
-            try (ResultSet resultSet = getTables(connection, schema, null)) {
+            try (ResultSet resultSet = getTables(connection, schema, Optional.empty())) {
                 ImmutableList.Builder<SchemaTableName> list = ImmutableList.builder();
                 while (resultSet.next()) {
                     list.add(getSchemaTableName(resultSet));
@@ -162,11 +160,10 @@ public class BaseJdbcClient
         }
     }
 
-    @Nullable
     @Override
-    public JdbcTableHandle getTableHandle(SchemaTableName schemaTableName)
+    public Optional<JdbcTableHandle> getTableHandle(JdbcIdentity identity, SchemaTableName schemaTableName)
     {
-        try (Connection connection = connectionFactory.openConnection()) {
+        try (Connection connection = connectionFactory.openConnection(identity)) {
             DatabaseMetaData metadata = connection.getMetaData();
             String jdbcSchemaName = schemaTableName.getSchemaName();
             String jdbcTableName = schemaTableName.getTableName();
@@ -174,23 +171,22 @@ public class BaseJdbcClient
                 jdbcSchemaName = jdbcSchemaName.toUpperCase(ENGLISH);
                 jdbcTableName = jdbcTableName.toUpperCase(ENGLISH);
             }
-            try (ResultSet resultSet = getTables(connection, jdbcSchemaName, jdbcTableName)) {
+            try (ResultSet resultSet = getTables(connection, Optional.of(jdbcSchemaName), Optional.of(jdbcTableName))) {
                 List<JdbcTableHandle> tableHandles = new ArrayList<>();
                 while (resultSet.next()) {
                     tableHandles.add(new JdbcTableHandle(
-                            connectorId,
                             schemaTableName,
                             resultSet.getString("TABLE_CAT"),
                             resultSet.getString("TABLE_SCHEM"),
                             resultSet.getString("TABLE_NAME")));
                 }
                 if (tableHandles.isEmpty()) {
-                    return null;
+                    return Optional.empty();
                 }
                 if (tableHandles.size() > 1) {
                     throw new PrestoException(NOT_SUPPORTED, "Multiple tables matched: " + schemaTableName);
                 }
-                return getOnlyElement(tableHandles);
+                return Optional.of(getOnlyElement(tableHandles));
             }
         }
         catch (SQLException e) {
@@ -201,7 +197,7 @@ public class BaseJdbcClient
     @Override
     public List<JdbcColumnHandle> getColumns(ConnectorSession session, JdbcTableHandle tableHandle)
     {
-        try (Connection connection = connectionFactory.openConnection()) {
+        try (Connection connection = connectionFactory.openConnection(JdbcIdentity.from(session))) {
             try (ResultSet resultSet = getColumns(tableHandle, connection.getMetaData())) {
                 List<JdbcColumnHandle> columns = new ArrayList<>();
                 while (resultSet.next()) {
@@ -214,7 +210,8 @@ public class BaseJdbcClient
                     // skip unsupported column types
                     if (columnMapping.isPresent()) {
                         String columnName = resultSet.getString("COLUMN_NAME");
-                        columns.add(new JdbcColumnHandle(connectorId, columnName, typeHandle, columnMapping.get().getType()));
+                        boolean nullable = (resultSet.getInt("NULLABLE") != columnNoNulls);
+                        columns.add(new JdbcColumnHandle(columnName, typeHandle, columnMapping.get().getType(), nullable));
                     }
                 }
                 if (columns.isEmpty()) {
@@ -236,24 +233,18 @@ public class BaseJdbcClient
     }
 
     @Override
-    public ConnectorSplitSource getSplits(JdbcTableLayoutHandle layoutHandle)
+    public ConnectorSplitSource getSplits(JdbcIdentity identity, JdbcTableLayoutHandle layoutHandle)
     {
         JdbcTableHandle tableHandle = layoutHandle.getTable();
-        JdbcSplit jdbcSplit = new JdbcSplit(
-                connectorId,
-                tableHandle.getCatalogName(),
-                tableHandle.getSchemaName(),
-                tableHandle.getTableName(),
-                layoutHandle.getTupleDomain(),
-                Optional.empty());
+        JdbcSplit jdbcSplit = new JdbcSplit(layoutHandle.getTupleDomain(), Optional.empty());
         return new FixedSplitSource(ImmutableList.of(jdbcSplit));
     }
 
     @Override
-    public Connection getConnection(JdbcSplit split)
+    public Connection getConnection(JdbcIdentity identity, JdbcSplit split)
             throws SQLException
     {
-        Connection connection = connectionFactory.openConnection();
+        Connection connection = connectionFactory.openConnection(identity);
         try {
             connection.setReadOnly(true);
         }
@@ -265,52 +256,74 @@ public class BaseJdbcClient
     }
 
     @Override
-    public PreparedStatement buildSql(ConnectorSession session, Connection connection, JdbcSplit split, List<JdbcColumnHandle> columnHandles)
+    public PreparedStatement buildSql(ConnectorSession session, Connection connection, JdbcSplit split, JdbcTableHandle table, List<JdbcColumnHandle> columns)
             throws SQLException
     {
         return new QueryBuilder(identifierQuote).buildSql(
                 this,
                 session,
                 connection,
-                split.getCatalogName(),
-                split.getSchemaName(),
-                split.getTableName(),
-                columnHandles,
+                table.getCatalogName(),
+                table.getSchemaName(),
+                table.getTableName(),
+                columns,
                 split.getTupleDomain(),
                 split.getAdditionalPredicate());
     }
 
     @Override
-    public JdbcOutputTableHandle beginCreateTable(ConnectorTableMetadata tableMetadata)
+    public void createTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)
     {
-        return beginWriteTable(tableMetadata);
+        try {
+            createTable(session, tableMetadata, tableMetadata.getTable().getTableName());
+        }
+        catch (SQLException e) {
+            throw new PrestoException(JDBC_ERROR, e);
+        }
     }
 
     @Override
-    public JdbcOutputTableHandle beginInsertTable(ConnectorTableMetadata tableMetadata)
+    public JdbcOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)
     {
-        return beginWriteTable(tableMetadata);
+        return beginWriteTable(session, tableMetadata);
     }
 
-    private JdbcOutputTableHandle beginWriteTable(ConnectorTableMetadata tableMetadata)
+    @Override
+    public JdbcOutputTableHandle beginInsertTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)
+    {
+        return beginWriteTable(session, tableMetadata);
+    }
+
+    private JdbcOutputTableHandle beginWriteTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)
+    {
+        try {
+            return createTable(session, tableMetadata, generateTemporaryTableName());
+        }
+        catch (SQLException e) {
+            throw new PrestoException(JDBC_ERROR, e);
+        }
+    }
+
+    protected JdbcOutputTableHandle createTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, String tableName)
+            throws SQLException
     {
         SchemaTableName schemaTableName = tableMetadata.getTable();
         String schema = schemaTableName.getSchemaName();
         String table = schemaTableName.getTableName();
 
-        if (!getSchemaNames().contains(schema)) {
+        JdbcIdentity identity = JdbcIdentity.from(session);
+        if (!getSchemaNames(identity).contains(schema)) {
             throw new PrestoException(NOT_FOUND, "Schema not found: " + schema);
         }
 
-        try (Connection connection = connectionFactory.openConnection()) {
+        try (Connection connection = connectionFactory.openConnection(identity)) {
             boolean uppercase = connection.getMetaData().storesUpperCaseIdentifiers();
             if (uppercase) {
                 schema = schema.toUpperCase(ENGLISH);
                 table = table.toUpperCase(ENGLISH);
+                tableName = tableName.toUpperCase(ENGLISH);
             }
             String catalog = connection.getCatalog();
-
-            String temporaryName = generateTemporaryTableName();
 
             ImmutableList.Builder<String> columnNames = ImmutableList.builder();
             ImmutableList.Builder<Type> columnTypes = ImmutableList.builder();
@@ -323,27 +336,35 @@ public class BaseJdbcClient
                 columnNames.add(columnName);
                 columnTypes.add(column.getType());
                 // TODO in INSERT case, we should reuse original column type and, ideally, constraints (then JdbcPageSink must get writer from toPrestoType())
-                columnList.add(format("%s %s", quoted(columnName), toWriteMapping(column.getType()).getDataType()));
+                columnList.add(getColumnSql(session, column, columnName));
             }
 
             String sql = format(
                     "CREATE TABLE %s (%s)",
-                    quoted(catalog, schema, temporaryName),
+                    quoted(catalog, schema, tableName),
                     join(", ", columnList.build()));
             execute(connection, sql);
 
             return new JdbcOutputTableHandle(
-                    connectorId,
                     catalog,
                     schema,
                     table,
                     columnNames.build(),
                     columnTypes.build(),
-                    temporaryName);
+                    tableName);
         }
-        catch (SQLException e) {
-            throw new PrestoException(JDBC_ERROR, e);
+    }
+
+    private String getColumnSql(ConnectorSession session, ColumnMetadata column, String columnName)
+    {
+        StringBuilder sb = new StringBuilder()
+                .append(quoted(columnName))
+                .append(" ")
+                .append(toWriteMapping(session, column.getType()).getDataType());
+        if (!column.isNullable()) {
+            sb.append(" NOT NULL");
         }
+        return sb.toString();
     }
 
     protected String generateTemporaryTableName()
@@ -352,14 +373,35 @@ public class BaseJdbcClient
     }
 
     @Override
-    public void commitCreateTable(JdbcOutputTableHandle handle)
+    public void commitCreateTable(JdbcIdentity identity, JdbcOutputTableHandle handle)
     {
-        String sql = format(
-                "ALTER TABLE %s RENAME TO %s",
-                quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTemporaryTableName()),
-                quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTableName()));
+        renameTable(
+                identity,
+                handle.getCatalogName(),
+                handle.getSchemaName(),
+                handle.getTemporaryTableName(),
+                new SchemaTableName(handle.getSchemaName(), handle.getTableName()));
+    }
 
-        try (Connection connection = getConnection(handle)) {
+    @Override
+    public void renameTable(JdbcIdentity identity, JdbcTableHandle handle, SchemaTableName newTableName)
+    {
+        renameTable(identity, handle.getCatalogName(), handle.getSchemaName(), handle.getTableName(), newTableName);
+    }
+
+    protected void renameTable(JdbcIdentity identity, String catalogName, String schemaName, String tableName, SchemaTableName newTable)
+    {
+        try (Connection connection = connectionFactory.openConnection(identity)) {
+            String newSchemaName = newTable.getSchemaName();
+            String newTableName = newTable.getTableName();
+            if (connection.getMetaData().storesUpperCaseIdentifiers()) {
+                newSchemaName = newSchemaName.toUpperCase(ENGLISH);
+                newTableName = newTableName.toUpperCase(ENGLISH);
+            }
+            String sql = format(
+                    "ALTER TABLE %s RENAME TO %s",
+                    quoted(catalogName, schemaName, tableName),
+                    quoted(catalogName, newSchemaName, newTableName));
             execute(connection, sql);
         }
         catch (SQLException e) {
@@ -368,21 +410,21 @@ public class BaseJdbcClient
     }
 
     @Override
-    public void finishInsertTable(JdbcOutputTableHandle handle)
+    public void finishInsertTable(JdbcIdentity identity, JdbcOutputTableHandle handle)
     {
         String temporaryTable = quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTemporaryTableName());
         String targetTable = quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTableName());
         String insertSql = format("INSERT INTO %s SELECT * FROM %s", targetTable, temporaryTable);
         String cleanupSql = "DROP TABLE " + temporaryTable;
 
-        try (Connection connection = getConnection(handle)) {
+        try (Connection connection = getConnection(identity, handle)) {
             execute(connection, insertSql);
         }
         catch (SQLException e) {
             throw new PrestoException(JDBC_ERROR, e);
         }
 
-        try (Connection connection = getConnection(handle)) {
+        try (Connection connection = getConnection(identity, handle)) {
             execute(connection, cleanupSql);
         }
         catch (SQLException e) {
@@ -391,11 +433,17 @@ public class BaseJdbcClient
     }
 
     @Override
-    public void dropTable(JdbcTableHandle handle)
+    public void addColumn(ConnectorSession session, JdbcTableHandle handle, ColumnMetadata column)
     {
-        String sql = "DROP TABLE " + quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTableName());
-
-        try (Connection connection = connectionFactory.openConnection()) {
+        try (Connection connection = connectionFactory.openConnection(JdbcIdentity.from(session))) {
+            String columnName = column.getName();
+            if (connection.getMetaData().storesUpperCaseIdentifiers()) {
+                columnName = columnName.toUpperCase(ENGLISH);
+            }
+            String sql = format(
+                    "ALTER TABLE %s ADD %s",
+                    quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTableName()),
+                    getColumnSql(session, column, columnName));
             execute(connection, sql);
         }
         catch (SQLException e) {
@@ -404,10 +452,56 @@ public class BaseJdbcClient
     }
 
     @Override
-    public void rollbackCreateTable(JdbcOutputTableHandle handle)
+    public void renameColumn(JdbcIdentity identity, JdbcTableHandle handle, JdbcColumnHandle jdbcColumn, String newColumnName)
     {
-        dropTable(new JdbcTableHandle(
-                handle.getConnectorId(),
+        try (Connection connection = connectionFactory.openConnection(identity)) {
+            if (connection.getMetaData().storesUpperCaseIdentifiers()) {
+                newColumnName = newColumnName.toUpperCase(ENGLISH);
+            }
+            String sql = format(
+                    "ALTER TABLE %s RENAME COLUMN %s TO %s",
+                    quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTableName()),
+                    jdbcColumn.getColumnName(),
+                    newColumnName);
+            execute(connection, sql);
+        }
+        catch (SQLException e) {
+            throw new PrestoException(JDBC_ERROR, e);
+        }
+    }
+
+    @Override
+    public void dropColumn(JdbcIdentity identity, JdbcTableHandle handle, JdbcColumnHandle column)
+    {
+        try (Connection connection = connectionFactory.openConnection(identity)) {
+            String sql = format(
+                    "ALTER TABLE %s DROP COLUMN %s",
+                    quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTableName()),
+                    column.getColumnName());
+            execute(connection, sql);
+        }
+        catch (SQLException e) {
+            throw new PrestoException(JDBC_ERROR, e);
+        }
+    }
+
+    @Override
+    public void dropTable(JdbcIdentity identity, JdbcTableHandle handle)
+    {
+        String sql = "DROP TABLE " + quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTableName());
+
+        try (Connection connection = connectionFactory.openConnection(identity)) {
+            execute(connection, sql);
+        }
+        catch (SQLException e) {
+            throw new PrestoException(JDBC_ERROR, e);
+        }
+    }
+
+    @Override
+    public void rollbackCreateTable(JdbcIdentity identity, JdbcOutputTableHandle handle)
+    {
+        dropTable(identity, new JdbcTableHandle(
                 new SchemaTableName(handle.getSchemaName(), handle.getTemporaryTableName()),
                 handle.getCatalogName(),
                 handle.getSchemaName(),
@@ -424,10 +518,10 @@ public class BaseJdbcClient
     }
 
     @Override
-    public Connection getConnection(JdbcOutputTableHandle handle)
+    public Connection getConnection(JdbcIdentity identity, JdbcOutputTableHandle handle)
             throws SQLException
     {
-        return connectionFactory.openConnection();
+        return connectionFactory.openConnection(identity);
     }
 
     @Override
@@ -437,15 +531,15 @@ public class BaseJdbcClient
         return connection.prepareStatement(sql);
     }
 
-    protected ResultSet getTables(Connection connection, String schemaName, String tableName)
+    protected ResultSet getTables(Connection connection, Optional<String> schemaName, Optional<String> tableName)
             throws SQLException
     {
         DatabaseMetaData metadata = connection.getMetaData();
-        String escape = metadata.getSearchStringEscape();
+        Optional<String> escape = Optional.ofNullable(metadata.getSearchStringEscape());
         return metadata.getTables(
                 connection.getCatalog(),
-                escapeNamePattern(schemaName, escape),
-                escapeNamePattern(tableName, escape),
+                escapeNamePattern(schemaName, escape).orElse(null),
+                escapeNamePattern(tableName, escape).orElse(null),
                 new String[] {"TABLE", "VIEW"});
     }
 
@@ -473,7 +567,7 @@ public class BaseJdbcClient
     }
 
     @Override
-    public WriteMapping toWriteMapping(Type type)
+    public WriteMapping toWriteMapping(ConnectorSession session, Type type)
     {
         if (isVarcharType(type)) {
             VarcharType varcharType = (VarcharType) type;
@@ -495,7 +589,7 @@ public class BaseJdbcClient
             else {
                 dataType = "char(" + charType.getLength() + ")";
             }
-            return WriteMapping.sliceMapping(dataType, charWriteFunction(charType));
+            return WriteMapping.sliceMapping(dataType, charWriteFunction());
         }
         if (type instanceof DecimalType) {
             DecimalType decimalType = (DecimalType) type;
@@ -532,11 +626,18 @@ public class BaseJdbcClient
         return sb.toString();
     }
 
-    protected static String escapeNamePattern(String name, String escape)
+    protected static Optional<String> escapeNamePattern(Optional<String> name, Optional<String> escape)
     {
-        if ((name == null) || (escape == null)) {
+        if (!name.isPresent() || !escape.isPresent()) {
             return name;
         }
+        return Optional.of(escapeNamePattern(name.get(), escape.get()));
+    }
+
+    private static String escapeNamePattern(String name, String escape)
+    {
+        requireNonNull(name, "name is null");
+        requireNonNull(escape, "escape is null");
         checkArgument(!escape.equals("_"), "Escape string must not be '_'");
         checkArgument(!escape.equals("%"), "Escape string must not be '%'");
         name = name.replace(escape, escape + escape);
@@ -548,11 +649,11 @@ public class BaseJdbcClient
     private static ResultSet getColumns(JdbcTableHandle tableHandle, DatabaseMetaData metadata)
             throws SQLException
     {
-        String escape = metadata.getSearchStringEscape();
+        Optional<String> escape = Optional.ofNullable(metadata.getSearchStringEscape());
         return metadata.getColumns(
                 tableHandle.getCatalogName(),
-                escapeNamePattern(tableHandle.getSchemaName(), escape),
-                escapeNamePattern(tableHandle.getTableName(), escape),
+                escapeNamePattern(Optional.ofNullable(tableHandle.getSchemaName()), escape).orElse(null),
+                escapeNamePattern(Optional.ofNullable(tableHandle.getTableName()), escape).orElse(null),
                 null);
     }
 }

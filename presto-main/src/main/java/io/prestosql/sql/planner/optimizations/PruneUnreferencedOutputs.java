@@ -222,7 +222,7 @@ public class PruneUnreferencedOutputs
                         .collect(toImmutableList());
             }
 
-            return new JoinNode(node.getId(), node.getType(), left, right, node.getCriteria(), outputSymbols, node.getFilter(), node.getLeftHashSymbol(), node.getRightHashSymbol(), node.getDistributionType());
+            return new JoinNode(node.getId(), node.getType(), left, right, node.getCriteria(), outputSymbols, node.getFilter(), node.getLeftHashSymbol(), node.getRightHashSymbol(), node.getDistributionType(), node.isSpillable());
         }
 
         @Override
@@ -320,7 +320,7 @@ public class PruneUnreferencedOutputs
             Map<Symbol, ColumnHandle> newAssignments = newOutputSymbols.stream()
                     .collect(Collectors.toMap(Function.identity(), node.getAssignments()::get));
 
-            return new IndexSourceNode(node.getId(), node.getIndexHandle(), node.getTableHandle(), node.getLayout(), newLookupSymbols, newOutputSymbols, newAssignments, node.getCurrentConstraint());
+            return new IndexSourceNode(node.getId(), node.getIndexHandle(), node.getTableHandle(), newLookupSymbols, newOutputSymbols, newAssignments, node.getCurrentConstraint());
         }
 
         @Override
@@ -426,7 +426,6 @@ public class PruneUnreferencedOutputs
                     node.getTable(),
                     newOutputs,
                     newAssignments,
-                    node.getLayout(),
                     node.getCurrentConstraint(),
                     node.getEnforcedConstraint());
         }

@@ -33,7 +33,7 @@ import io.prestosql.spi.predicate.TupleDomain;
 
 import java.util.Set;
 
-import static io.prestosql.spi.NodeState.ACTIVE;
+import static io.prestosql.metadata.NodeState.ACTIVE;
 import static io.prestosql.spi.StandardErrorCode.NOT_FOUND;
 import static io.prestosql.spi.connector.SystemTable.Distribution.ALL_COORDINATORS;
 import static io.prestosql.spi.connector.SystemTable.Distribution.ALL_NODES;
@@ -67,7 +67,7 @@ public class SystemSplitManager
         Distribution tableDistributionMode = systemTable.getDistribution();
         if (tableDistributionMode == SINGLE_COORDINATOR) {
             HostAddress address = nodeManager.getCurrentNode().getHostAndPort();
-            ConnectorSplit split = new SystemSplit(tableHandle.getConnectorId(), tableHandle, address, constraint);
+            ConnectorSplit split = new SystemSplit(address, constraint);
             return new FixedSplitSource(ImmutableList.of(split));
         }
 
@@ -81,7 +81,7 @@ public class SystemSplitManager
         }
         Set<Node> nodeSet = nodes.build();
         for (Node node : nodeSet) {
-            splits.add(new SystemSplit(tableHandle.getConnectorId(), tableHandle, node.getHostAndPort(), constraint));
+            splits.add(new SystemSplit(node.getHostAndPort(), constraint));
         }
         return new FixedSplitSource(splits.build());
     }

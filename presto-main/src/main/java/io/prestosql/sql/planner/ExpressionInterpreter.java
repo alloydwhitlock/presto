@@ -28,7 +28,6 @@ import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.Signature;
 import io.prestosql.operator.scalar.ArraySubscriptOperator;
 import io.prestosql.operator.scalar.ScalarFunctionImplementation;
-import io.prestosql.spi.Page;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
@@ -108,7 +107,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -120,7 +118,6 @@ import static com.google.common.base.Throwables.throwIfInstanceOf;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
-import static io.prestosql.SystemSessionProperties.isLegacyRowFieldOrdinalAccessEnabled;
 import static io.prestosql.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.prestosql.spi.type.TypeSignature.parseTypeSignature;
@@ -134,7 +131,6 @@ import static io.prestosql.sql.planner.DeterminismEvaluator.isDeterministic;
 import static io.prestosql.sql.planner.iterative.rule.CanonicalizeExpressionRewriter.canonicalizeExpression;
 import static io.prestosql.type.LikeFunctions.isLikePattern;
 import static io.prestosql.type.LikeFunctions.unescapeLiteralLikePattern;
-import static io.prestosql.util.LegacyRowFieldOrdinalAccessUtil.parseAnonymousRowFieldOrdinalAccess;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
@@ -147,7 +143,6 @@ public class ExpressionInterpreter
     private final boolean optimize;
     private final Map<NodeRef<Expression>, Type> expressionTypes;
     private final InterpretedFunctionInvoker functionInvoker;
-    private final boolean legacyRowFieldOrdinalAccess;
 
     private final Visitor visitor;
 
@@ -236,7 +231,6 @@ public class ExpressionInterpreter
         verify((expressionTypes.containsKey(NodeRef.of(expression))));
         this.optimize = optimize;
         this.functionInvoker = new InterpretedFunctionInvoker(metadata.getFunctionRegistry());
-        this.legacyRowFieldOrdinalAccess = isLegacyRowFieldOrdinalAccessEnabled(session);
 
         this.visitor = new Visitor();
     }
@@ -252,10 +246,10 @@ public class ExpressionInterpreter
         return visitor.process(expression, new NoPagePositionContext());
     }
 
-    public Object evaluate(int position, Page page)
+    public Object evaluate(SymbolResolver inputs)
     {
         checkState(!optimize, "evaluate(int, Page) not allowed for optimizer");
-        return visitor.process(expression, new SinglePagePositionContext(position, page));
+        return visitor.process(expression, inputs);
     }
 
     public Object optimize(SymbolResolver inputs)
@@ -271,39 +265,7 @@ public class ExpressionInterpreter
         @Override
         public Object visitFieldReference(FieldReference node, Object context)
         {
-            Type type = type(node);
-
-            int channel = node.getFieldIndex();
-            if (context instanceof PagePositionContext) {
-                PagePositionContext pagePositionContext = (PagePositionContext) context;
-                int position = pagePositionContext.getPosition(channel);
-                Block block = pagePositionContext.getBlock(channel);
-
-                if (block.isNull(position)) {
-                    return null;
-                }
-
-                Class<?> javaType = type.getJavaType();
-                if (javaType == boolean.class) {
-                    return type.getBoolean(block, position);
-                }
-                else if (javaType == long.class) {
-                    return type.getLong(block, position);
-                }
-                else if (javaType == double.class) {
-                    return type.getDouble(block, position);
-                }
-                else if (javaType == Slice.class) {
-                    return type.getSlice(block, position);
-                }
-                else if (javaType == Block.class) {
-                    return type.getObject(block, position);
-                }
-                else {
-                    throw new UnsupportedOperationException("not yet implemented");
-                }
-            }
-            throw new UnsupportedOperationException("Inputs must be set");
+            throw new UnsupportedOperationException("Field references not supported in interpreter");
         }
 
         @Override
@@ -339,13 +301,6 @@ public class ExpressionInterpreter
                 }
             }
 
-            if (legacyRowFieldOrdinalAccess && index < 0) {
-                OptionalInt rowIndex = parseAnonymousRowFieldOrdinalAccess(fieldName, fields);
-                if (rowIndex.isPresent()) {
-                    index = rowIndex.getAsInt();
-                }
-            }
-
             checkState(index >= 0, "could not find field name: %s", node.getField());
             if (row.isNull(index)) {
                 return null;
@@ -354,16 +309,16 @@ public class ExpressionInterpreter
             if (javaType == long.class) {
                 return returnType.getLong(row, index);
             }
-            else if (javaType == double.class) {
+            if (javaType == double.class) {
                 return returnType.getDouble(row, index);
             }
-            else if (javaType == boolean.class) {
+            if (javaType == boolean.class) {
                 return returnType.getBoolean(row, index);
             }
-            else if (javaType == Slice.class) {
+            if (javaType == Slice.class) {
                 return returnType.getSlice(row, index);
             }
-            else if (!javaType.isPrimitive()) {
+            if (!javaType.isPrimitive()) {
                 return returnType.getObject(row, index);
             }
             throw new UnsupportedOperationException("Dereference a unsupported primitive type: " + javaType.getName());
@@ -1296,31 +1251,6 @@ public class ExpressionInterpreter
         public int getPosition(int channel)
         {
             throw new IllegalArgumentException("Context does not have a position");
-        }
-    }
-
-    private static class SinglePagePositionContext
-            implements PagePositionContext
-    {
-        private final int position;
-        private final Page page;
-
-        private SinglePagePositionContext(int position, Page page)
-        {
-            this.position = position;
-            this.page = page;
-        }
-
-        @Override
-        public Block getBlock(int channel)
-        {
-            return page.getBlock(channel);
-        }
-
-        @Override
-        public int getPosition(int channel)
-        {
-            return position;
         }
     }
 

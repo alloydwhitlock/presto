@@ -21,9 +21,11 @@ import io.prestosql.spi.block.BlockEncodingSerde;
 import io.prestosql.spi.connector.CatalogSchemaName;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
+import io.prestosql.spi.connector.ConnectorCapabilities;
 import io.prestosql.spi.connector.ConnectorOutputMetadata;
 import io.prestosql.spi.connector.ConnectorTableMetadata;
 import io.prestosql.spi.connector.Constraint;
+import io.prestosql.spi.connector.LimitApplicationResult;
 import io.prestosql.spi.connector.SystemTable;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.security.GrantInfo;
@@ -73,25 +75,26 @@ public interface Metadata
 
     Optional<TableHandle> getTableHandleForStatisticsCollection(Session session, QualifiedObjectName tableName, Map<String, Object> analyzeProperties);
 
-    List<TableLayoutResult> getLayouts(Session session, TableHandle tableHandle, Constraint<ColumnHandle> constraint, Optional<Set<ColumnHandle>> desiredColumns);
+    @Deprecated
+    Optional<TableLayoutResult> getLayout(Session session, TableHandle tableHandle, Constraint<ColumnHandle> constraint, Optional<Set<ColumnHandle>> desiredColumns);
 
-    TableLayout getLayout(Session session, TableLayoutHandle handle);
+    TableProperties getTableProperties(Session session, TableHandle handle);
 
     /**
-     * Return a table layout handle whose partitioning is converted to the provided partitioning handle,
-     * but otherwise identical to the provided table layout handle.
-     * The provided table layout handle must be one that the connector can transparently convert to from
-     * the original partitioning handle associated with the provided table layout handle,
+     * Return a table handle whose partitioning is converted to the provided partitioning handle,
+     * but otherwise identical to the provided table handle.
+     * The provided table handle must be one that the connector can transparently convert to from
+     * the original partitioning handle associated with the provided table handle,
      * as promised by {@link #getCommonPartitioning}.
      */
-    TableLayoutHandle getAlternativeLayoutHandle(Session session, TableLayoutHandle tableLayoutHandle, PartitioningHandle partitioningHandle);
+    TableHandle makeCompatiblePartitioning(Session session, TableHandle table, PartitioningHandle partitioningHandle);
 
     /**
      * Return a partitioning handle which the connector can transparently convert both {@code left} and {@code right} into.
      */
     Optional<PartitioningHandle> getCommonPartitioning(Session session, PartitioningHandle left, PartitioningHandle right);
 
-    Optional<Object> getInfo(Session session, TableLayoutHandle handle);
+    Optional<Object> getInfo(Session session, TableHandle handle);
 
     /**
      * Return the metadata for the specified table handle.
@@ -241,14 +244,14 @@ public interface Metadata
     /**
      * @return whether delete without table scan is supported
      */
-    boolean supportsMetadataDelete(Session session, TableHandle tableHandle, TableLayoutHandle tableLayoutHandle);
+    boolean supportsMetadataDelete(Session session, TableHandle tableHandle);
 
     /**
      * Delete the provide table layout
      *
      * @return number of rows deleted, or empty for unknown
      */
-    OptionalLong metadataDelete(Session session, TableHandle tableHandle, TableLayoutHandle tableLayoutHandle);
+    OptionalLong metadataDelete(Session session, TableHandle tableHandle);
 
     /**
      * Begin delete query
@@ -380,4 +383,11 @@ public interface Metadata
     ColumnPropertyManager getColumnPropertyManager();
 
     AnalyzePropertyManager getAnalyzePropertyManager();
+
+    Set<ConnectorCapabilities> getConnectorCapabilities(Session session, ConnectorId catalogName);
+
+    @Deprecated
+    boolean usesLegacyTableLayouts(Session session, TableHandle table);
+
+    Optional<LimitApplicationResult<TableHandle>> applyLimit(Session session, TableHandle table, long limit);
 }

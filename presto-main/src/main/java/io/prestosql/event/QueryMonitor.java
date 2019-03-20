@@ -23,7 +23,7 @@ import io.airlift.stats.Distribution.DistributionSnapshot;
 import io.prestosql.SessionRepresentation;
 import io.prestosql.client.NodeVersion;
 import io.prestosql.connector.ConnectorId;
-import io.prestosql.cost.PlanNodeCostEstimate;
+import io.prestosql.cost.PlanCostEstimate;
 import io.prestosql.cost.PlanNodeStatsEstimate;
 import io.prestosql.cost.StatsAndCosts;
 import io.prestosql.eventlistener.EventListenerManager;
@@ -150,6 +150,7 @@ public class QueryMonitor
                         ofMillis(0),
                         Optional.empty(),
                         Optional.empty(),
+                        Optional.empty(),
                         0,
                         0,
                         0,
@@ -227,6 +228,7 @@ public class QueryMonitor
                 ofMillis(queryStats.getTotalCpuTime().toMillis()),
                 ofMillis(queryStats.getTotalScheduledTime().toMillis()),
                 ofMillis(queryStats.getQueuedTime().toMillis()),
+                Optional.of(ofMillis(queryStats.getResourceWaitingTime().toMillis())),
                 Optional.of(ofMillis(queryStats.getAnalysisTime().toMillis())),
                 Optional.of(ofMillis(queryStats.getDistributedPlanningTime().toMillis())),
                 queryStats.getPeakUserMemoryReservation().toBytes(),
@@ -255,7 +257,7 @@ public class QueryMonitor
     private static StatsAndCosts reconstructStatsAndCosts(StageInfo stageInfo)
     {
         ImmutableMap.Builder<PlanNodeId, PlanNodeStatsEstimate> planNodeStats = ImmutableMap.builder();
-        ImmutableMap.Builder<PlanNodeId, PlanNodeCostEstimate> planNodeCosts = ImmutableMap.builder();
+        ImmutableMap.Builder<PlanNodeId, PlanCostEstimate> planNodeCosts = ImmutableMap.builder();
         reconstructStatsAndCosts(stageInfo, planNodeStats, planNodeCosts);
         return new StatsAndCosts(planNodeStats.build(), planNodeCosts.build());
     }
@@ -263,7 +265,7 @@ public class QueryMonitor
     private static void reconstructStatsAndCosts(
             StageInfo stage,
             ImmutableMap.Builder<PlanNodeId, PlanNodeStatsEstimate> planNodeStats,
-            ImmutableMap.Builder<PlanNodeId, PlanNodeCostEstimate> planNodeCosts)
+            ImmutableMap.Builder<PlanNodeId, PlanCostEstimate> planNodeCosts)
     {
         PlanFragment planFragment = stage.getPlan();
         if (planFragment != null) {
@@ -412,6 +414,9 @@ public class QueryMonitor
             // planning duration -- start to end of planning
             long planning = queryStats.getTotalPlanningTime().toMillis();
 
+            // Time spent waiting for required no. of worker nodes to be present
+            long waiting = queryStats.getResourceWaitingTime().toMillis();
+
             List<StageInfo> stages = StageInfo.getAllStages(queryInfo.getOutputStage());
             // long lastSchedulingCompletion = 0;
             long firstTaskStartTime = queryEndTime.getMillis();
@@ -453,6 +458,7 @@ public class QueryMonitor
                     queryInfo.getSession().getTransactionId().map(TransactionId::toString).orElse(""),
                     elapsed,
                     planning,
+                    waiting,
                     scheduling,
                     running,
                     finishing,
@@ -484,6 +490,7 @@ public class QueryMonitor
                 0,
                 0,
                 0,
+                0,
                 queryStartTime,
                 queryEndTime);
     }
@@ -493,17 +500,19 @@ public class QueryMonitor
             String transactionId,
             long elapsedMillis,
             long planningMillis,
+            long waitingMillis,
             long schedulingMillis,
             long runningMillis,
             long finishingMillis,
             DateTime queryStartTime,
             DateTime queryEndTime)
     {
-        log.info("TIMELINE: Query %s :: Transaction:[%s] :: elapsed %sms :: planning %sms :: scheduling %sms :: running %sms :: finishing %sms :: begin %s :: end %s",
+        log.info("TIMELINE: Query %s :: Transaction:[%s] :: elapsed %sms :: planning %sms :: waiting %sms :: scheduling %sms :: running %sms :: finishing %sms :: begin %s :: end %s",
                 queryId,
                 transactionId,
                 elapsedMillis,
                 planningMillis,
+                waitingMillis,
                 schedulingMillis,
                 runningMillis,
                 finishingMillis,

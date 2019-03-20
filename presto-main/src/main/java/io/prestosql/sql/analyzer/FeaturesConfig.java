@@ -45,6 +45,11 @@ import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MINUTES;
 
 @DefunctConfig({
+        "deprecated.legacy-char-to-varchar-coercion",
+        "deprecated.legacy-map-subscript",
+        "deprecated.group-by-uses-equal",
+        "deprecated.legacy-row-field-ordinal-access",
+        "deprecated.legacy-unnest-array-rows",
         "resource-group-manager",
         "experimental.resource-groups-enabled",
         "experimental-syntax-enabled",
@@ -81,11 +86,7 @@ public class FeaturesConfig
     private boolean enableIntermediateAggregations;
     private boolean pushTableWriteThroughUnion = true;
     private boolean exchangeCompressionEnabled;
-    private boolean groupByUsesEqualTo;
     private boolean legacyTimestamp = true;
-    private boolean legacyMapSubscript;
-    private boolean legacyRowFieldOrdinalAccess;
-    private boolean legacyCharToVarcharCoercion;
     private boolean optimizeMixedDistinctAggregations;
     private boolean forceSingleNodeOutput = true;
     private boolean pagesIndexEagerCompactionEnabled;
@@ -100,6 +101,8 @@ public class FeaturesConfig
     private ArrayAggGroupImplementation arrayAggGroupImplementation = ArrayAggGroupImplementation.NEW;
     private MultimapAggGroupImplementation multimapAggGroupImplementation = MultimapAggGroupImplementation.NEW;
     private boolean spillEnabled;
+    private boolean spillOrderBy = true;
+    private boolean spillWindowOperator = true;
     private DataSize aggregationOperatorUnspillMemoryLimit = new DataSize(4, DataSize.Unit.MEGABYTE);
     private List<Path> spillerSpillPaths = ImmutableList.of();
     private int spillerThreads = 4;
@@ -122,7 +125,6 @@ public class FeaturesConfig
     private DataSize filterAndProjectMinOutputPageSize = new DataSize(500, KILOBYTE);
     private int filterAndProjectMinOutputPageRowCount = 256;
     private int maxGroupingSets = 2048;
-    private boolean legacyUnnestArrayRows;
 
     public enum JoinReorderingStrategy
     {
@@ -196,42 +198,6 @@ public class FeaturesConfig
         return this;
     }
 
-    @Config("deprecated.legacy-row-field-ordinal-access")
-    public FeaturesConfig setLegacyRowFieldOrdinalAccess(boolean value)
-    {
-        this.legacyRowFieldOrdinalAccess = value;
-        return this;
-    }
-
-    public boolean isLegacyRowFieldOrdinalAccess()
-    {
-        return legacyRowFieldOrdinalAccess;
-    }
-
-    @Config("deprecated.legacy-char-to-varchar-coercion")
-    public FeaturesConfig setLegacyCharToVarcharCoercion(boolean value)
-    {
-        this.legacyCharToVarcharCoercion = value;
-        return this;
-    }
-
-    public boolean isLegacyCharToVarcharCoercion()
-    {
-        return legacyCharToVarcharCoercion;
-    }
-
-    @Config("deprecated.group-by-uses-equal")
-    public FeaturesConfig setGroupByUsesEqualTo(boolean value)
-    {
-        this.groupByUsesEqualTo = value;
-        return this;
-    }
-
-    public boolean isGroupByUsesEqualTo()
-    {
-        return groupByUsesEqualTo;
-    }
-
     @Config("deprecated.legacy-timestamp")
     public FeaturesConfig setLegacyTimestamp(boolean value)
     {
@@ -242,18 +208,6 @@ public class FeaturesConfig
     public boolean isLegacyTimestamp()
     {
         return legacyTimestamp;
-    }
-
-    @Config("deprecated.legacy-map-subscript")
-    public FeaturesConfig setLegacyMapSubscript(boolean value)
-    {
-        this.legacyMapSubscript = value;
-        return this;
-    }
-
-    public boolean isLegacyMapSubscript()
-    {
-        return legacyMapSubscript;
     }
 
     public JoinDistributionType getJoinDistributionType()
@@ -274,6 +228,7 @@ public class FeaturesConfig
     }
 
     @Config("join-max-broadcast-table-size")
+    @ConfigDescription("Maximum estimated size of a table that can be broadcast when using automatic join type selection")
     public FeaturesConfig setJoinMaxBroadcastTableSize(DataSize joinMaxBroadcastTableSize)
     {
         this.joinMaxBroadcastTableSize = joinMaxBroadcastTableSize;
@@ -556,6 +511,30 @@ public class FeaturesConfig
     public FeaturesConfig setSpillEnabled(boolean spillEnabled)
     {
         this.spillEnabled = spillEnabled;
+        return this;
+    }
+
+    public boolean isSpillOrderBy()
+    {
+        return spillOrderBy;
+    }
+
+    @Config("experimental.spill-order-by")
+    public FeaturesConfig setSpillOrderBy(boolean spillOrderBy)
+    {
+        this.spillOrderBy = spillOrderBy;
+        return this;
+    }
+
+    public boolean isSpillWindowOperator()
+    {
+        return spillWindowOperator;
+    }
+
+    @Config("experimental.spill-window-operator")
+    public FeaturesConfig setSpillWindowOperator(boolean spillWindowOperator)
+    {
+        this.spillWindowOperator = spillWindowOperator;
         return this;
     }
 
@@ -885,18 +864,6 @@ public class FeaturesConfig
     public FeaturesConfig setMaxGroupingSets(int maxGroupingSets)
     {
         this.maxGroupingSets = maxGroupingSets;
-        return this;
-    }
-
-    public boolean isLegacyUnnestArrayRows()
-    {
-        return legacyUnnestArrayRows;
-    }
-
-    @Config("deprecated.legacy-unnest-array-rows")
-    public FeaturesConfig setLegacyUnnestArrayRows(boolean legacyUnnestArrayRows)
-    {
-        this.legacyUnnestArrayRows = legacyUnnestArrayRows;
         return this;
     }
 }

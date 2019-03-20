@@ -22,7 +22,6 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
 import io.prestosql.Session;
-import io.prestosql.SystemSessionProperties;
 import io.prestosql.connector.ConnectorId;
 import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.metadata.FunctionKind;
@@ -166,7 +165,6 @@ import static io.prestosql.sql.ParsingUtil.createParsingOptions;
 import static io.prestosql.sql.analyzer.AggregationAnalyzer.verifyOrderByAggregations;
 import static io.prestosql.sql.analyzer.AggregationAnalyzer.verifySourceAggregations;
 import static io.prestosql.sql.analyzer.ExpressionAnalyzer.createConstantAnalyzer;
-import static io.prestosql.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
 import static io.prestosql.sql.analyzer.ExpressionTreeUtils.extractAggregateFunctions;
 import static io.prestosql.sql.analyzer.ExpressionTreeUtils.extractExpressions;
 import static io.prestosql.sql.analyzer.ExpressionTreeUtils.extractWindowFunctions;
@@ -751,7 +749,7 @@ class StatementAnalyzer
                 Type expressionType = expressionAnalysis.getType(expression);
                 if (expressionType instanceof ArrayType) {
                     Type elementType = ((ArrayType) expressionType).getElementType();
-                    if (!SystemSessionProperties.isLegacyUnnest(session) && elementType instanceof RowType) {
+                    if (elementType instanceof RowType) {
                         ((RowType) elementType).getFields().stream()
                                 .map(field -> Field.newUnqualified(field.getName(), field.getType()))
                                 .forEach(outputFields::add);
@@ -872,7 +870,7 @@ class StatementAnalyzer
                 // are implicitly coercible to the declared view types.
                 List<Field> outputFields = view.getColumns().stream()
                         .map(column -> Field.newQualified(
-                                QualifiedName.of(name.getObjectName()),
+                                table.getName(),
                                 Optional.of(column.getName()),
                                 column.getType(),
                                 false,
@@ -954,15 +952,17 @@ class StatementAnalyzer
                 throw new SemanticException(NON_NUMERIC_SAMPLE_PERCENTAGE, relation.getSamplePercentage(), "Sample percentage cannot contain column references");
             }
 
-            Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypes(
+            Map<NodeRef<Expression>, Type> expressionTypes = ExpressionAnalyzer.analyzeExpressions(
                     session,
                     metadata,
                     sqlParser,
                     TypeProvider.empty(),
-                    relation.getSamplePercentage(),
+                    ImmutableList.of(relation.getSamplePercentage()),
                     analysis.getParameters(),
                     WarningCollector.NOOP,
-                    analysis.isDescribe());
+                    analysis.isDescribe())
+                    .getExpressionTypes();
+
             ExpressionInterpreter samplePercentageEval = expressionOptimizer(relation.getSamplePercentage(), metadata, session, expressionTypes);
 
             Object samplePercentageObject = samplePercentageEval.optimize(symbol -> {
@@ -1158,7 +1158,7 @@ class StatementAnalyzer
             if (node.getType() == Join.Type.CROSS || node.getType() == Join.Type.IMPLICIT) {
                 return output;
             }
-            else if (criteria instanceof JoinOn) {
+            if (criteria instanceof JoinOn) {
                 Expression expression = ((JoinOn) criteria).getExpression();
 
                 // need to register coercions in case when join criteria requires coercion (e.g. join on char(1) = char(2))

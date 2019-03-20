@@ -22,33 +22,28 @@ import io.prestosql.spi.type.Type;
 import java.util.Objects;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
+import static java.util.Collections.emptyMap;
 import static java.util.Objects.requireNonNull;
 
 public final class JdbcColumnHandle
         implements ColumnHandle
 {
-    private final String connectorId;
     private final String columnName;
     private final JdbcTypeHandle jdbcTypeHandle;
     private final Type columnType;
+    private final boolean nullable;
 
     @JsonCreator
     public JdbcColumnHandle(
-            @JsonProperty("connectorId") String connectorId,
             @JsonProperty("columnName") String columnName,
             @JsonProperty("jdbcTypeHandle") JdbcTypeHandle jdbcTypeHandle,
-            @JsonProperty("columnType") Type columnType)
+            @JsonProperty("columnType") Type columnType,
+            @JsonProperty("nullable") boolean nullable)
     {
-        this.connectorId = requireNonNull(connectorId, "connectorId is null");
         this.columnName = requireNonNull(columnName, "columnName is null");
         this.jdbcTypeHandle = requireNonNull(jdbcTypeHandle, "jdbcTypeHandle is null");
         this.columnType = requireNonNull(columnType, "columnType is null");
-    }
-
-    @JsonProperty
-    public String getConnectorId()
-    {
-        return connectorId;
+        this.nullable = nullable;
     }
 
     @JsonProperty
@@ -69,9 +64,15 @@ public final class JdbcColumnHandle
         return columnType;
     }
 
+    @JsonProperty
+    public boolean isNullable()
+    {
+        return nullable;
+    }
+
     public ColumnMetadata getColumnMetadata()
     {
-        return new ColumnMetadata(columnName, columnType);
+        return new ColumnMetadata(columnName, columnType, nullable, null, null, false, emptyMap());
     }
 
     @Override
@@ -84,24 +85,23 @@ public final class JdbcColumnHandle
             return false;
         }
         JdbcColumnHandle o = (JdbcColumnHandle) obj;
-        return Objects.equals(this.connectorId, o.connectorId) &&
-                Objects.equals(this.columnName, o.columnName);
+        return Objects.equals(this.columnName, o.columnName);
     }
 
     @Override
     public int hashCode()
     {
-        return Objects.hash(connectorId, columnName);
+        return Objects.hash(columnName);
     }
 
     @Override
     public String toString()
     {
         return toStringHelper(this)
-                .add("connectorId", connectorId)
                 .add("columnName", columnName)
                 .add("jdbcTypeHandle", jdbcTypeHandle)
                 .add("columnType", columnType)
+                .add("nullable", nullable)
                 .toString();
     }
 }

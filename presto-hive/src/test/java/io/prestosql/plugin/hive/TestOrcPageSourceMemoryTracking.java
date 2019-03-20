@@ -21,6 +21,7 @@ import io.airlift.slice.Slice;
 import io.airlift.stats.Distribution;
 import io.airlift.units.DataSize;
 import io.prestosql.connector.ConnectorId;
+import io.prestosql.execution.Lifespan;
 import io.prestosql.metadata.MetadataManager;
 import io.prestosql.metadata.Split;
 import io.prestosql.operator.DriverContext;
@@ -45,7 +46,6 @@ import io.prestosql.sql.planner.plan.PlanNodeId;
 import io.prestosql.sql.relational.RowExpression;
 import io.prestosql.testing.TestingConnectorSession;
 import io.prestosql.testing.TestingSplit;
-import io.prestosql.testing.TestingTransactionHandle;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -105,6 +105,7 @@ import static io.prestosql.plugin.hive.HiveTestUtils.SESSION;
 import static io.prestosql.plugin.hive.HiveTestUtils.TYPE_MANAGER;
 import static io.prestosql.spi.type.VarcharType.createUnboundedVarcharType;
 import static io.prestosql.sql.relational.Expressions.field;
+import static io.prestosql.testing.TestingHandles.TEST_TABLE_HANDLE;
 import static io.prestosql.testing.TestingSession.testSessionBuilder;
 import static io.prestosql.testing.TestingTaskContext.createTaskContext;
 import static java.util.Objects.requireNonNull;
@@ -252,7 +253,7 @@ public class TestOrcPageSourceMemoryTracking
             throws Exception
     {
         int maxReadBytes = 1_000;
-        HiveClientConfig config = new HiveClientConfig();
+        HiveConfig config = new HiveConfig();
         config.setOrcMaxReadBlockSize(new DataSize(maxReadBytes, BYTE));
         ConnectorSession session = new TestingConnectorSession(new HiveSessionProperties(config, new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
         FileFormatDataSourceStats stats = new FileFormatDataSourceStats();
@@ -495,10 +496,11 @@ public class TestOrcPageSourceMemoryTracking
             SourceOperatorFactory sourceOperatorFactory = new TableScanOperatorFactory(
                     0,
                     new PlanNodeId("0"),
-                    (session, split, columnHandles) -> pageSource,
+                    (session, split, table, columnHandles) -> pageSource,
+                    TEST_TABLE_HANDLE,
                     columns.stream().map(columnHandle -> (ColumnHandle) columnHandle).collect(toList()));
             SourceOperator operator = sourceOperatorFactory.createOperator(driverContext);
-            operator.addSplit(new Split(new ConnectorId("test"), TestingTransactionHandle.create(), TestingSplit.createLocalSplit()));
+            operator.addSplit(new Split(new ConnectorId("test"), TestingSplit.createLocalSplit(), Lifespan.taskWide()));
             return operator;
         }
 
@@ -515,15 +517,16 @@ public class TestOrcPageSourceMemoryTracking
                     0,
                     new PlanNodeId("test"),
                     new PlanNodeId("0"),
-                    (session, split, columnHandles) -> pageSource,
+                    (session, split, table, columnHandles) -> pageSource,
                     cursorProcessor,
                     pageProcessor,
+                    TEST_TABLE_HANDLE,
                     columns.stream().map(columnHandle -> (ColumnHandle) columnHandle).collect(toList()),
                     types,
                     new DataSize(0, BYTE),
                     0);
             SourceOperator operator = sourceOperatorFactory.createOperator(driverContext);
-            operator.addSplit(new Split(new ConnectorId("test"), TestingTransactionHandle.create(), TestingSplit.createLocalSplit()));
+            operator.addSplit(new Split(new ConnectorId("test"), TestingSplit.createLocalSplit(), Lifespan.taskWide()));
             return operator;
         }
 

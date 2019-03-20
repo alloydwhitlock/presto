@@ -24,19 +24,20 @@ import io.airlift.slice.Slice;
 import io.airlift.stats.CounterStat;
 import io.prestosql.GroupByHashPageIndexerFactory;
 import io.prestosql.metadata.MetadataManager;
-import io.prestosql.plugin.hive.AbstractTestHiveClient.HiveTransaction;
-import io.prestosql.plugin.hive.AbstractTestHiveClient.Transaction;
+import io.prestosql.plugin.hive.AbstractTestHive.HiveTransaction;
+import io.prestosql.plugin.hive.AbstractTestHive.Transaction;
 import io.prestosql.plugin.hive.HdfsEnvironment.HdfsContext;
 import io.prestosql.plugin.hive.authentication.NoHdfsAuthentication;
 import io.prestosql.plugin.hive.metastore.CachingHiveMetastore;
 import io.prestosql.plugin.hive.metastore.Database;
-import io.prestosql.plugin.hive.metastore.ExtendedHiveMetastore;
+import io.prestosql.plugin.hive.metastore.HiveMetastore;
 import io.prestosql.plugin.hive.metastore.PrincipalPrivileges;
 import io.prestosql.plugin.hive.metastore.Table;
 import io.prestosql.plugin.hive.metastore.thrift.BridgingHiveMetastore;
-import io.prestosql.plugin.hive.metastore.thrift.HiveCluster;
-import io.prestosql.plugin.hive.metastore.thrift.TestingHiveCluster;
+import io.prestosql.plugin.hive.metastore.thrift.MetastoreLocator;
+import io.prestosql.plugin.hive.metastore.thrift.TestingMetastoreLocator;
 import io.prestosql.plugin.hive.metastore.thrift.ThriftHiveMetastore;
+import io.prestosql.plugin.hive.metastore.thrift.ThriftHiveMetastoreConfig;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
 import io.prestosql.spi.connector.ConnectorMetadata;
@@ -56,7 +57,6 @@ import io.prestosql.spi.connector.Constraint;
 import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.connector.TableNotFoundException;
 import io.prestosql.spi.security.ConnectorIdentity;
-import io.prestosql.sql.analyzer.FeaturesConfig;
 import io.prestosql.sql.gen.JoinCompiler;
 import io.prestosql.testing.MaterializedResult;
 import io.prestosql.testing.MaterializedRow;
@@ -83,10 +83,10 @@ import static com.google.common.util.concurrent.MoreExecutors.newDirectExecutorS
 import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.testing.Assertions.assertEqualsIgnoreOrder;
-import static io.prestosql.plugin.hive.AbstractTestHiveClient.createTableProperties;
-import static io.prestosql.plugin.hive.AbstractTestHiveClient.filterNonHiddenColumnHandles;
-import static io.prestosql.plugin.hive.AbstractTestHiveClient.filterNonHiddenColumnMetadata;
-import static io.prestosql.plugin.hive.AbstractTestHiveClient.getAllSplits;
+import static io.prestosql.plugin.hive.AbstractTestHive.createTableProperties;
+import static io.prestosql.plugin.hive.AbstractTestHive.filterNonHiddenColumnHandles;
+import static io.prestosql.plugin.hive.AbstractTestHive.filterNonHiddenColumnMetadata;
+import static io.prestosql.plugin.hive.AbstractTestHive.getAllSplits;
 import static io.prestosql.plugin.hive.HiveTestUtils.PAGE_SORTER;
 import static io.prestosql.plugin.hive.HiveTestUtils.TYPE_MANAGER;
 import static io.prestosql.plugin.hive.HiveTestUtils.getDefaultHiveDataStreamFactories;
@@ -121,7 +121,7 @@ public abstract class AbstractTestHiveFileSystem
     protected ConnectorPageSourceProvider pageSourceProvider;
 
     private ExecutorService executor;
-    private HiveClientConfig config;
+    private HiveConfig config;
 
     @BeforeClass
     public void setUp()
@@ -140,7 +140,7 @@ public abstract class AbstractTestHiveFileSystem
 
     protected abstract Path getBasePath();
 
-    protected void setup(String host, int port, String databaseName, Function<HiveClientConfig, HdfsConfiguration> hdfsConfigurationProvider, boolean s3SelectPushdownEnabled)
+    protected void setup(String host, int port, String databaseName, Function<HiveConfig, HdfsConfiguration> hdfsConfigurationProvider, boolean s3SelectPushdownEnabled)
     {
         database = databaseName;
         table = new SchemaTableName(database, "presto_test_external_fs");
@@ -148,14 +148,14 @@ public abstract class AbstractTestHiveFileSystem
         String random = UUID.randomUUID().toString().toLowerCase(ENGLISH).replace("-", "");
         temporaryCreateTable = new SchemaTableName(database, "tmp_presto_test_create_" + random);
 
-        config = new HiveClientConfig().setS3SelectPushdownEnabled(s3SelectPushdownEnabled);
+        config = new HiveConfig().setS3SelectPushdownEnabled(s3SelectPushdownEnabled);
 
         String proxy = System.getProperty("hive.metastore.thrift.client.socks-proxy");
         if (proxy != null) {
             config.setMetastoreSocksProxy(HostAndPort.fromString(proxy));
         }
 
-        HiveCluster hiveCluster = new TestingHiveCluster(config, host, port);
+        MetastoreLocator metastoreLocator = new TestingMetastoreLocator(config, host, port);
         ExecutorService executor = newCachedThreadPool(daemonThreadsNamed("hive-%s"));
         HivePartitionManager hivePartitionManager = new HivePartitionManager(TYPE_MANAGER, config);
 
@@ -163,7 +163,7 @@ public abstract class AbstractTestHiveFileSystem
 
         hdfsEnvironment = new HdfsEnvironment(hdfsConfiguration, config, new NoHdfsAuthentication());
         metastoreClient = new TestingHiveMetastore(
-                new BridgingHiveMetastore(new ThriftHiveMetastore(hiveCluster)),
+                new BridgingHiveMetastore(new ThriftHiveMetastore(metastoreLocator, new ThriftHiveMetastoreConfig())),
                 executor,
                 config,
                 getBasePath(),
@@ -178,7 +178,6 @@ public abstract class AbstractTestHiveFileSystem
                 newDirectExecutorService(),
                 TYPE_MANAGER,
                 locationService,
-                new TableParameterCodec(),
                 partitionUpdateCodec,
                 new HiveTypeTranslator(),
                 new NodeVersion("test_version"));
@@ -203,7 +202,7 @@ public abstract class AbstractTestHiveFileSystem
                 hdfsEnvironment,
                 PAGE_SORTER,
                 metastoreClient,
-                new GroupByHashPageIndexerFactory(new JoinCompiler(MetadataManager.createTestMetadataManager(), new FeaturesConfig())),
+                new GroupByHashPageIndexerFactory(new JoinCompiler(MetadataManager.createTestMetadataManager())),
                 TYPE_MANAGER,
                 config,
                 locationService,
@@ -246,7 +245,7 @@ public abstract class AbstractTestHiveFileSystem
             long sum = 0;
 
             for (ConnectorSplit split : getAllSplits(splitSource)) {
-                try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, columnHandles)) {
+                try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, table, columnHandles)) {
                     MaterializedResult result = materializeSourceDataStream(session, pageSource, getTypes(columnHandles));
 
                     for (MaterializedRow row : result) {
@@ -411,7 +410,7 @@ public abstract class AbstractTestHiveFileSystem
             ConnectorSplitSource splitSource = splitManager.getSplits(transaction.getTransactionHandle(), session, layoutHandle, UNGROUPED_SCHEDULING);
             ConnectorSplit split = getOnlyElement(getAllSplits(splitSource));
 
-            try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, columnHandles)) {
+            try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, tableHandle, columnHandles)) {
                 MaterializedResult result = materializeSourceDataStream(session, pageSource, getTypes(columnHandles));
                 assertEqualsIgnoreOrder(result.getMaterializedRows(), data.getMaterializedRows());
             }
@@ -451,9 +450,9 @@ public abstract class AbstractTestHiveFileSystem
         private final Path basePath;
         private final HdfsEnvironment hdfsEnvironment;
 
-        public TestingHiveMetastore(ExtendedHiveMetastore delegate, ExecutorService executor, HiveClientConfig hiveClientConfig, Path basePath, HdfsEnvironment hdfsEnvironment)
+        public TestingHiveMetastore(HiveMetastore delegate, ExecutorService executor, HiveConfig hiveConfig, Path basePath, HdfsEnvironment hdfsEnvironment)
         {
-            super(delegate, executor, hiveClientConfig);
+            super(delegate, executor, hiveConfig);
             this.basePath = basePath;
             this.hdfsEnvironment = hdfsEnvironment;
         }

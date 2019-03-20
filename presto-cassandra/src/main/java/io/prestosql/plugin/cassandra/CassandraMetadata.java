@@ -13,6 +13,7 @@
  */
 package io.prestosql.plugin.cassandra;
 
+import com.datastax.driver.core.ProtocolVersion;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.json.JsonCodec;
@@ -58,6 +59,7 @@ import static io.prestosql.plugin.cassandra.util.CassandraCqlUtils.validSchemaNa
 import static io.prestosql.plugin.cassandra.util.CassandraCqlUtils.validTableName;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.prestosql.spi.StandardErrorCode.PERMISSION_DENIED;
+import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
@@ -68,6 +70,7 @@ public class CassandraMetadata
     private final CassandraSession cassandraSession;
     private final CassandraPartitionManager partitionManager;
     private final boolean allowDropTable;
+    private final ProtocolVersion protocolVersion;
 
     private final JsonCodec<List<ExtraColumnMetadata>> extraColumnMetadataCodec;
 
@@ -81,6 +84,7 @@ public class CassandraMetadata
         this.partitionManager = requireNonNull(partitionManager, "partitionManager is null");
         this.cassandraSession = requireNonNull(cassandraSession, "cassandraSession is null");
         this.allowDropTable = requireNonNull(config, "config is null").getAllowDropTable();
+        this.protocolVersion = requireNonNull(config, "config is null").getProtocolVersion();
         this.extraColumnMetadataCodec = requireNonNull(extraColumnMetadataCodec, "extraColumnMetadataCodec is null");
     }
 
@@ -246,7 +250,7 @@ public class CassandraMetadata
             throw new PrestoException(NOT_SUPPORTED, "Dropping materialized views not yet supported");
         }
 
-        cassandraSession.execute(String.format("DROP TABLE \"%s\".\"%s\"", cassandraTableHandle.getSchemaName(), cassandraTableHandle.getTableName()));
+        cassandraSession.execute(format("DROP TABLE \"%s\".\"%s\"", cassandraTableHandle.getSchemaName(), cassandraTableHandle.getTableName()));
     }
 
     @Override
@@ -274,14 +278,14 @@ public class CassandraMetadata
         String tableName = table.getTableName();
         List<String> columns = columnNames.build();
         List<Type> types = columnTypes.build();
-        StringBuilder queryBuilder = new StringBuilder(String.format("CREATE TABLE \"%s\".\"%s\"(id uuid primary key", schemaName, tableName));
+        StringBuilder queryBuilder = new StringBuilder(format("CREATE TABLE \"%s\".\"%s\"(id uuid primary key", schemaName, tableName));
         for (int i = 0; i < columns.size(); i++) {
             String name = columns.get(i);
             Type type = types.get(i);
             queryBuilder.append(", ")
                     .append(name)
                     .append(" ")
-                    .append(toCassandraType(type).name().toLowerCase(ENGLISH));
+                    .append(toCassandraType(type, protocolVersion).name().toLowerCase(ENGLISH));
         }
         queryBuilder.append(") ");
 

@@ -31,6 +31,7 @@ import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeManager;
 import io.prestosql.spi.type.TypeSignature;
 import io.prestosql.spi.type.VarcharType;
+import io.prestosql.sql.planner.Symbol;
 import io.prestosql.sql.relational.optimizer.ExpressionOptimizer;
 import io.prestosql.sql.tree.ArithmeticBinaryExpression;
 import io.prestosql.sql.tree.ArithmeticUnaryExpression;
@@ -81,14 +82,12 @@ import io.prestosql.type.UnknownType;
 
 import java.util.List;
 import java.util.Map;
-import java.util.OptionalInt;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.slice.SliceUtf8.countCodePoints;
 import static io.airlift.slice.Slices.utf8Slice;
-import static io.prestosql.SystemSessionProperties.isLegacyRowFieldOrdinalAccessEnabled;
 import static io.prestosql.metadata.FunctionKind.SCALAR;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
@@ -130,7 +129,6 @@ import static io.prestosql.util.DateTimeUtils.parseTimeWithTimeZone;
 import static io.prestosql.util.DateTimeUtils.parseTimeWithoutTimeZone;
 import static io.prestosql.util.DateTimeUtils.parseTimestampLiteral;
 import static io.prestosql.util.DateTimeUtils.parseYearMonthInterval;
-import static io.prestosql.util.LegacyRowFieldOrdinalAccessUtil.parseAnonymousRowFieldOrdinalAccess;
 import static java.util.Objects.requireNonNull;
 
 public final class SqlToRowExpressionTranslator
@@ -141,6 +139,7 @@ public final class SqlToRowExpressionTranslator
             Expression expression,
             FunctionKind functionKind,
             Map<NodeRef<Expression>, Type> types,
+            Map<Symbol, Integer> layout,
             FunctionRegistry functionRegistry,
             TypeManager typeManager,
             Session session,
@@ -150,8 +149,8 @@ public final class SqlToRowExpressionTranslator
                 functionKind,
                 types,
                 typeManager,
+                layout,
                 session.getTimeZoneKey(),
-                isLegacyRowFieldOrdinalAccessEnabled(session),
                 SystemSessionProperties.isLegacyTimestamp(session));
         RowExpression result = visitor.process(expression, null);
 
@@ -171,24 +170,23 @@ public final class SqlToRowExpressionTranslator
         private final FunctionKind functionKind;
         private final Map<NodeRef<Expression>, Type> types;
         private final TypeManager typeManager;
+        private final Map<Symbol, Integer> layout;
         private final TimeZoneKey timeZoneKey;
-        private final boolean legacyRowFieldOrdinalAccess;
-        @Deprecated
         private final boolean isLegacyTimestamp;
 
         private Visitor(
                 FunctionKind functionKind,
                 Map<NodeRef<Expression>, Type> types,
                 TypeManager typeManager,
+                Map<Symbol, Integer> layout,
                 TimeZoneKey timeZoneKey,
-                boolean legacyRowFieldOrdinalAccess,
                 boolean isLegacyTimestamp)
         {
             this.functionKind = functionKind;
             this.types = ImmutableMap.copyOf(requireNonNull(types, "types is null"));
             this.typeManager = typeManager;
+            this.layout = layout;
             this.timeZoneKey = timeZoneKey;
-            this.legacyRowFieldOrdinalAccess = legacyRowFieldOrdinalAccess;
             this.isLegacyTimestamp = isLegacyTimestamp;
         }
 
@@ -363,6 +361,11 @@ public final class SqlToRowExpressionTranslator
         @Override
         protected RowExpression visitSymbolReference(SymbolReference node, Void context)
         {
+            Integer field = layout.get(Symbol.from(node));
+            if (field != null) {
+                return field(field, getType(node));
+            }
+
             return new VariableReferenceExpression(node.getName(), getType(node));
         }
 
@@ -590,13 +593,6 @@ public final class SqlToRowExpressionTranslator
                 if (field.getName().isPresent() && field.getName().get().equalsIgnoreCase(fieldName)) {
                     checkArgument(index < 0, "Ambiguous field %s in type %s", field, rowType.getDisplayName());
                     index = i;
-                }
-            }
-
-            if (legacyRowFieldOrdinalAccess && index < 0) {
-                OptionalInt rowIndex = parseAnonymousRowFieldOrdinalAccess(fieldName, fields);
-                if (rowIndex.isPresent()) {
-                    index = rowIndex.getAsInt();
                 }
             }
 

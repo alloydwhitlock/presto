@@ -13,12 +13,9 @@
  */
 package io.prestosql.plugin.postgresql;
 
-import com.google.common.collect.ImmutableMap;
 import io.airlift.testing.postgresql.TestingPostgreSqlServer;
-import io.prestosql.testing.MaterializedResult;
-import io.prestosql.testing.QueryRunner;
 import io.prestosql.tests.AbstractTestIntegrationSmokeTest;
-import io.prestosql.tests.DistributedQueryRunner;
+import org.intellij.lang.annotations.Language;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.Test;
 
@@ -27,7 +24,6 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.util.Map;
 import java.util.UUID;
 
 import static io.airlift.tpch.TpchTable.ORDERS;
@@ -186,23 +182,45 @@ public class TestPostgreSqlIntegrationSmokeTest
 
         assertEquals(getQueryRunner().execute("SELECT * FROM char_trailing_space WHERE x = char ' test'").getRowCount(), 0);
 
-        Map<String, String> properties = ImmutableMap.of("deprecated.legacy-char-to-varchar-coercion", "true");
-        Map<String, String> connectorProperties = ImmutableMap.of("connection-url", postgreSqlServer.getJdbcUrl());
-
-        try (QueryRunner queryRunner = new DistributedQueryRunner(getSession(), 3, properties);) {
-            queryRunner.installPlugin(new PostgreSqlPlugin());
-            queryRunner.createCatalog("postgresql", "postgresql", connectorProperties);
-
-            assertEquals(queryRunner.execute("SELECT * FROM char_trailing_space WHERE x = char 'test'").getRowCount(), 0);
-            assertEquals(queryRunner.execute("SELECT * FROM char_trailing_space WHERE x = char 'test  '").getRowCount(), 0);
-            assertEquals(queryRunner.execute("SELECT * FROM char_trailing_space WHERE x = char 'test       '").getRowCount(), 0);
-
-            MaterializedResult result = queryRunner.execute("SELECT * FROM char_trailing_space WHERE x = char 'test      '");
-            assertEquals(result.getRowCount(), 1);
-            assertEquals(result.getMaterializedRows().get(0).getField(0), "test      ");
-        }
-
         assertUpdate("DROP TABLE char_trailing_space");
+    }
+
+    @Test
+    public void testInsertIntoNotNullColumn()
+    {
+        @Language("SQL") String createTableSql = format("" +
+                        "CREATE TABLE %s.tpch.test_insert_not_null (\n" +
+                        "   column_a date,\n" +
+                        "   column_b date NOT NULL\n" +
+                        ")",
+                getSession().getCatalog().get());
+        assertUpdate(createTableSql);
+        assertEquals(computeScalar("SHOW CREATE TABLE test_insert_not_null"), createTableSql);
+
+        assertQueryFails("INSERT INTO test_insert_not_null (column_a) VALUES (date '2012-12-31')", "(?s).*null value in column \"column_b\" violates not-null constraint.*");
+        assertQueryFails("INSERT INTO test_insert_not_null (column_a, column_b) VALUES (date '2012-12-31', null)", "(?s).*null value in column \"column_b\" violates not-null constraint.*");
+
+        assertUpdate("ALTER TABLE test_insert_not_null ADD COLUMN column_c BIGINT NOT NULL");
+
+        createTableSql = format("" +
+                        "CREATE TABLE %s.tpch.test_insert_not_null (\n" +
+                        "   column_a date,\n" +
+                        "   column_b date NOT NULL,\n" +
+                        "   column_c bigint NOT NULL\n" +
+                        ")",
+                getSession().getCatalog().get());
+        assertEquals(computeScalar("SHOW CREATE TABLE test_insert_not_null"), createTableSql);
+
+        assertQueryFails("INSERT INTO test_insert_not_null (column_b) VALUES (date '2012-12-31')", "(?s).*null value in column \"column_c\" violates not-null constraint.*");
+        assertQueryFails("INSERT INTO test_insert_not_null (column_b, column_c) VALUES (date '2012-12-31', null)", "(?s).*null value in column \"column_c\" violates not-null constraint.*");
+
+        assertUpdate("INSERT INTO test_insert_not_null (column_b, column_c) VALUES (date '2012-12-31', 1)", 1);
+        assertUpdate("INSERT INTO test_insert_not_null (column_a, column_b, column_c) VALUES (date '2013-01-01', date '2013-01-02', 2)", 1);
+        assertQuery(
+                "SELECT * FROM test_insert_not_null",
+                "VALUES (NULL, CAST('2012-12-31' AS DATE), 1), (CAST('2013-01-01' AS DATE), CAST('2013-01-02' AS DATE), 2)");
+
+        assertUpdate("DROP TABLE test_insert_not_null");
     }
 
     private AutoCloseable withSchema(String schema)

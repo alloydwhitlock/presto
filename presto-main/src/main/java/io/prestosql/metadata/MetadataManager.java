@@ -33,6 +33,7 @@ import io.prestosql.spi.block.BlockEncodingSerde;
 import io.prestosql.spi.connector.CatalogSchemaName;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
+import io.prestosql.spi.connector.ConnectorCapabilities;
 import io.prestosql.spi.connector.ConnectorInsertTableHandle;
 import io.prestosql.spi.connector.ConnectorMetadata;
 import io.prestosql.spi.connector.ConnectorOutputMetadata;
@@ -45,9 +46,11 @@ import io.prestosql.spi.connector.ConnectorTableLayout;
 import io.prestosql.spi.connector.ConnectorTableLayoutHandle;
 import io.prestosql.spi.connector.ConnectorTableLayoutResult;
 import io.prestosql.spi.connector.ConnectorTableMetadata;
+import io.prestosql.spi.connector.ConnectorTableProperties;
 import io.prestosql.spi.connector.ConnectorTransactionHandle;
 import io.prestosql.spi.connector.ConnectorViewDefinition;
 import io.prestosql.spi.connector.Constraint;
+import io.prestosql.spi.connector.LimitApplicationResult;
 import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.connector.SchemaTablePrefix;
 import io.prestosql.spi.connector.SystemTable;
@@ -88,10 +91,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static io.prestosql.metadata.QualifiedObjectName.convertFromSchemaTableName;
-import static io.prestosql.metadata.TableLayout.fromConnectorLayout;
 import static io.prestosql.metadata.ViewDefinition.ViewColumn;
 import static io.prestosql.spi.StandardErrorCode.INVALID_VIEW;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
@@ -326,9 +328,14 @@ public class MetadataManager
             ConnectorId connectorId = catalogMetadata.getConnectorId(session, table);
             ConnectorMetadata metadata = catalogMetadata.getMetadataFor(connectorId);
 
-            ConnectorTableHandle tableHandle = metadata.getTableHandle(session.toConnectorSession(connectorId), table.asSchemaTableName());
+            ConnectorSession connectorSession = session.toConnectorSession(connectorId);
+            ConnectorTableHandle tableHandle = metadata.getTableHandle(connectorSession, table.asSchemaTableName());
             if (tableHandle != null) {
-                return Optional.of(new TableHandle(connectorId, tableHandle));
+                return Optional.of(new TableHandle(
+                        connectorId,
+                        tableHandle,
+                        catalogMetadata.getTransactionHandleFor(connectorId),
+                        Optional.empty()));
             }
         }
         return Optional.empty();
@@ -347,7 +354,11 @@ public class MetadataManager
 
             ConnectorTableHandle tableHandle = metadata.getTableHandleForStatisticsCollection(session.toConnectorSession(connectorId), table.asSchemaTableName(), analyzeProperties);
             if (tableHandle != null) {
-                return Optional.of(new TableHandle(connectorId, tableHandle));
+                return Optional.of(new TableHandle(
+                        connectorId,
+                        tableHandle,
+                        catalogMetadata.getTransactionHandleFor(connectorId),
+                        Optional.empty()));
             }
         }
         return Optional.empty();
@@ -373,10 +384,10 @@ public class MetadataManager
     }
 
     @Override
-    public List<TableLayoutResult> getLayouts(Session session, TableHandle table, Constraint<ColumnHandle> constraint, Optional<Set<ColumnHandle>> desiredColumns)
+    public Optional<TableLayoutResult> getLayout(Session session, TableHandle table, Constraint<ColumnHandle> constraint, Optional<Set<ColumnHandle>> desiredColumns)
     {
         if (constraint.getSummary().isNone()) {
-            return ImmutableList.of();
+            return Optional.empty();
         }
 
         ConnectorId connectorId = table.getConnectorId();
@@ -384,36 +395,57 @@ public class MetadataManager
 
         CatalogMetadata catalogMetadata = getCatalogMetadata(session, connectorId);
         ConnectorMetadata metadata = catalogMetadata.getMetadataFor(connectorId);
+
+        checkState(metadata.usesLegacyTableLayouts(), "getLayout() was called even though connector doesn't support legacy Table Layout");
+
         ConnectorTransactionHandle transaction = catalogMetadata.getTransactionHandleFor(connectorId);
         ConnectorSession connectorSession = session.toConnectorSession(connectorId);
         List<ConnectorTableLayoutResult> layouts = metadata.getTableLayouts(connectorSession, connectorTable, constraint, desiredColumns);
+        if (layouts.isEmpty()) {
+            return Optional.empty();
+        }
 
-        return layouts.stream()
-                .map(layout -> new TableLayoutResult(fromConnectorLayout(connectorId, transaction, layout.getTableLayout()), layout.getUnenforcedConstraint()))
-                .collect(toImmutableList());
+        if (layouts.size() > 1) {
+            throw new PrestoException(NOT_SUPPORTED, format("Connector returned multiple layouts for table %s", table));
+        }
+
+        ConnectorTableLayout tableLayout = layouts.get(0).getTableLayout();
+        return Optional.of(new TableLayoutResult(
+                new TableHandle(connectorId, connectorTable, transaction, Optional.of(tableLayout.getHandle())),
+                new TableProperties(connectorId, transaction, new ConnectorTableProperties(tableLayout)),
+                layouts.get(0).getUnenforcedConstraint()));
     }
 
     @Override
-    public TableLayout getLayout(Session session, TableLayoutHandle handle)
+    public TableProperties getTableProperties(Session session, TableHandle handle)
     {
         ConnectorId connectorId = handle.getConnectorId();
         CatalogMetadata catalogMetadata = getCatalogMetadata(session, connectorId);
         ConnectorMetadata metadata = catalogMetadata.getMetadataFor(connectorId);
-        ConnectorTransactionHandle transaction = catalogMetadata.getTransactionHandleFor(connectorId);
-        return fromConnectorLayout(connectorId, transaction, metadata.getTableLayout(session.toConnectorSession(connectorId), handle.getConnectorHandle()));
+        ConnectorSession connectorSession = session.toConnectorSession(connectorId);
+
+        if (metadata.usesLegacyTableLayouts()) {
+            return handle.getLayout()
+                    .map(layout -> new TableProperties(connectorId, handle.getTransaction(), new ConnectorTableProperties(metadata.getTableLayout(connectorSession, layout))))
+                    .orElseGet(() -> getLayout(session, handle, Constraint.alwaysTrue(), Optional.empty())
+                            .get()
+                            .getTableProperties());
+        }
+
+        return new TableProperties(connectorId, handle.getTransaction(), metadata.getTableProperties(connectorSession, handle.getConnectorHandle()));
     }
 
     @Override
-    public TableLayoutHandle getAlternativeLayoutHandle(Session session, TableLayoutHandle tableLayoutHandle, PartitioningHandle partitioningHandle)
+    public TableHandle makeCompatiblePartitioning(Session session, TableHandle tableHandle, PartitioningHandle partitioningHandle)
     {
         checkArgument(partitioningHandle.getConnectorId().isPresent(), "Expect partitioning handle from connector, got system partitioning handle");
         ConnectorId connectorId = partitioningHandle.getConnectorId().get();
-        checkArgument(connectorId.equals(tableLayoutHandle.getConnectorId()), "ConnectorId of tableLayoutHandle and partitioningHandle does not match");
+        checkArgument(connectorId.equals(tableHandle.getConnectorId()), "ConnectorId of tableHandle and partitioningHandle does not match");
         CatalogMetadata catalogMetadata = getCatalogMetadata(session, connectorId);
         ConnectorMetadata metadata = catalogMetadata.getMetadataFor(connectorId);
         ConnectorTransactionHandle transaction = catalogMetadata.getTransactionHandleFor(connectorId);
-        ConnectorTableLayoutHandle newTableLayoutHandle = metadata.getAlternativeLayoutHandle(session.toConnectorSession(connectorId), tableLayoutHandle.getConnectorHandle(), partitioningHandle.getConnectorHandle());
-        return new TableLayoutHandle(connectorId, transaction, newTableLayoutHandle);
+        ConnectorTableLayoutHandle newTableLayoutHandle = metadata.makeCompatiblePartitioning(session.toConnectorSession(connectorId), tableHandle.getLayout().get(), partitioningHandle.getConnectorHandle());
+        return new TableHandle(connectorId, tableHandle.getConnectorHandle(), transaction, Optional.of(newTableLayoutHandle));
     }
 
     @Override
@@ -435,12 +467,23 @@ public class MetadataManager
     }
 
     @Override
-    public Optional<Object> getInfo(Session session, TableLayoutHandle handle)
+    public Optional<Object> getInfo(Session session, TableHandle handle)
     {
         ConnectorId connectorId = handle.getConnectorId();
         ConnectorMetadata metadata = getMetadata(session, connectorId);
-        ConnectorTableLayout tableLayout = metadata.getTableLayout(session.toConnectorSession(connectorId), handle.getConnectorHandle());
-        return metadata.getInfo(tableLayout.getHandle());
+
+        if (usesLegacyTableLayouts(session, handle)) {
+            ConnectorTableLayoutHandle layoutHandle = handle.getLayout()
+                    .orElseGet(() -> getLayout(session, handle, Constraint.alwaysTrue(), Optional.empty())
+                            .get()
+                            .getNewTableHandle()
+                            .getLayout()
+                            .get());
+
+            return metadata.getInfo(layoutHandle);
+        }
+
+        return metadata.getInfo(handle.getConnectorHandle());
     }
 
     @Override
@@ -781,22 +824,22 @@ public class MetadataManager
     }
 
     @Override
-    public boolean supportsMetadataDelete(Session session, TableHandle tableHandle, TableLayoutHandle tableLayoutHandle)
+    public boolean supportsMetadataDelete(Session session, TableHandle tableHandle)
     {
         ConnectorId connectorId = tableHandle.getConnectorId();
         ConnectorMetadata metadata = getMetadata(session, connectorId);
         return metadata.supportsMetadataDelete(
                 session.toConnectorSession(connectorId),
                 tableHandle.getConnectorHandle(),
-                tableLayoutHandle.getConnectorHandle());
+                tableHandle.getLayout().get());
     }
 
     @Override
-    public OptionalLong metadataDelete(Session session, TableHandle tableHandle, TableLayoutHandle tableLayoutHandle)
+    public OptionalLong metadataDelete(Session session, TableHandle tableHandle)
     {
         ConnectorId connectorId = tableHandle.getConnectorId();
         ConnectorMetadata metadata = getMetadataForWrite(session, connectorId);
-        return metadata.metadataDelete(session.toConnectorSession(connectorId), tableHandle.getConnectorHandle(), tableLayoutHandle.getConnectorHandle());
+        return metadata.metadataDelete(session.toConnectorSession(connectorId), tableHandle.getConnectorHandle(), tableHandle.getLayout().get());
     }
 
     @Override
@@ -805,7 +848,7 @@ public class MetadataManager
         ConnectorId connectorId = tableHandle.getConnectorId();
         ConnectorMetadata metadata = getMetadataForWrite(session, connectorId);
         ConnectorTableHandle newHandle = metadata.beginDelete(session.toConnectorSession(connectorId), tableHandle.getConnectorHandle());
-        return new TableHandle(tableHandle.getConnectorId(), newHandle);
+        return new TableHandle(tableHandle.getConnectorId(), newHandle, tableHandle.getTransaction(), tableHandle.getLayout());
     }
 
     @Override
@@ -1121,6 +1164,34 @@ public class MetadataManager
     public AnalyzePropertyManager getAnalyzePropertyManager()
     {
         return analyzePropertyManager;
+    }
+
+    @Override
+    public Set<ConnectorCapabilities> getConnectorCapabilities(Session session, ConnectorId connectorId)
+    {
+        return getCatalogMetadata(session, connectorId).getConnectorCapabilities();
+    }
+
+    @Override
+    public boolean usesLegacyTableLayouts(Session session, TableHandle table)
+    {
+        return getMetadata(session, table.getConnectorId()).usesLegacyTableLayouts();
+    }
+
+    @Override
+    public Optional<LimitApplicationResult<TableHandle>> applyLimit(Session session, TableHandle table, long limit)
+    {
+        ConnectorId connectorId = table.getConnectorId();
+        ConnectorMetadata metadata = getMetadata(session, connectorId);
+
+        if (metadata.usesLegacyTableLayouts()) {
+            return Optional.empty();
+        }
+
+        return metadata.applyLimit(table.getConnectorHandle(), limit)
+                .map(result -> new LimitApplicationResult<>(
+                        new TableHandle(connectorId, result.getHandle(), table.getTransaction(), Optional.empty()),
+                        result.isLimitGuaranteed()));
     }
 
     private ViewDefinition deserializeView(String data)

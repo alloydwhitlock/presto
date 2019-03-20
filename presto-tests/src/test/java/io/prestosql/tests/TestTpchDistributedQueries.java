@@ -14,10 +14,21 @@
 package io.prestosql.tests;
 
 import com.google.common.base.Strings;
+import com.google.common.collect.ImmutableSet;
+import io.prestosql.spi.connector.CatalogSchemaTableName;
+import io.prestosql.sql.planner.planPrinter.IoPlanPrinter;
+import io.prestosql.testing.MaterializedResult;
 import io.prestosql.tests.tpch.TpchQueryRunnerBuilder;
 import org.intellij.lang.annotations.Language;
 import org.testng.annotations.Test;
 
+import java.util.Optional;
+
+import static com.google.common.collect.Iterables.getOnlyElement;
+import static io.airlift.json.JsonCodec.jsonCodec;
+import static io.prestosql.spi.predicate.Marker.Bound.EXACTLY;
+import static io.prestosql.spi.type.VarcharType.createVarcharType;
+import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
 
 public class TestTpchDistributedQueries
@@ -29,11 +40,45 @@ public class TestTpchDistributedQueries
     }
 
     @Test
+    public void testIOExplain()
+    {
+        String query = "SELECT * FROM orders";
+        MaterializedResult result = computeActual("EXPLAIN (TYPE IO, FORMAT JSON) " + query);
+        IoPlanPrinter.IoPlan.TableColumnInfo input = new IoPlanPrinter.IoPlan.TableColumnInfo(
+                new CatalogSchemaTableName("tpch", "sf0.01", "orders"),
+                ImmutableSet.of(
+                        new IoPlanPrinter.ColumnConstraint(
+                                "orderstatus",
+                                createVarcharType(1).getTypeSignature(),
+                                new IoPlanPrinter.FormattedDomain(
+                                        false,
+                                        ImmutableSet.of(
+                                                new IoPlanPrinter.FormattedRange(
+                                                        new IoPlanPrinter.FormattedMarker(Optional.of("F"), EXACTLY),
+                                                        new IoPlanPrinter.FormattedMarker(Optional.of("F"), EXACTLY)),
+                                                new IoPlanPrinter.FormattedRange(
+                                                        new IoPlanPrinter.FormattedMarker(Optional.of("O"), EXACTLY),
+                                                        new IoPlanPrinter.FormattedMarker(Optional.of("O"), EXACTLY)),
+                                                new IoPlanPrinter.FormattedRange(
+                                                        new IoPlanPrinter.FormattedMarker(Optional.of("P"), EXACTLY),
+                                                        new IoPlanPrinter.FormattedMarker(Optional.of("P"), EXACTLY)))))));
+        assertEquals(
+                jsonCodec(IoPlanPrinter.IoPlan.class).fromJson((String) getOnlyElement(result.getOnlyColumnAsSet())),
+                new IoPlanPrinter.IoPlan(ImmutableSet.of(input), Optional.empty()));
+    }
+
+    @Test
     public void testTooLongQuery()
     {
         //  Generate a super-long query: SELECT x,x,x,x,x,... FROM (VALUES 1,2,3,4,5) t(x)
         @Language("SQL") String longQuery = "SELECT x" + Strings.repeat(",x", 500_000) + " FROM (VALUES 1,2,3,4,5) t(x)";
         assertQueryFails(longQuery, "Query text length \\(1000037\\) exceeds the maximum length \\(1000000\\)");
+    }
+
+    @Test
+    public void testAnalyzePropertiesSystemTable()
+    {
+        assertQuery("SELECT COUNT(*) FROM system.metadata.analyze_properties WHERE catalog_name = 'tpch'", "SELECT 0");
     }
 
     @Test

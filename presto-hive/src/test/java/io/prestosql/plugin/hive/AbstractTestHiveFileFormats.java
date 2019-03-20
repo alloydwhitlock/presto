@@ -621,40 +621,40 @@ public abstract class AbstractTestHiveFileFormats
         if (cursor.isNull(field)) {
             return null;
         }
-        else if (BOOLEAN.equals(type)) {
+        if (BOOLEAN.equals(type)) {
             return cursor.getBoolean(field);
         }
-        else if (TINYINT.equals(type)) {
+        if (TINYINT.equals(type)) {
             return cursor.getLong(field);
         }
-        else if (SMALLINT.equals(type)) {
+        if (SMALLINT.equals(type)) {
             return cursor.getLong(field);
         }
-        else if (INTEGER.equals(type)) {
+        if (INTEGER.equals(type)) {
             return (int) cursor.getLong(field);
         }
-        else if (BIGINT.equals(type)) {
+        if (BIGINT.equals(type)) {
             return cursor.getLong(field);
         }
-        else if (REAL.equals(type)) {
+        if (REAL.equals(type)) {
             return intBitsToFloat((int) cursor.getLong(field));
         }
-        else if (DOUBLE.equals(type)) {
+        if (DOUBLE.equals(type)) {
             return cursor.getDouble(field);
         }
-        else if (isVarcharType(type) || isCharType(type) || VARBINARY.equals(type)) {
+        if (isVarcharType(type) || isCharType(type) || VARBINARY.equals(type)) {
             return cursor.getSlice(field);
         }
-        else if (DateType.DATE.equals(type)) {
+        if (DateType.DATE.equals(type)) {
             return cursor.getLong(field);
         }
-        else if (TimestampType.TIMESTAMP.equals(type)) {
+        if (TimestampType.TIMESTAMP.equals(type)) {
             return cursor.getLong(field);
         }
-        else if (isStructuralType(type)) {
+        if (isStructuralType(type)) {
             return cursor.getObject(field);
         }
-        else if (type instanceof DecimalType) {
+        if (type instanceof DecimalType) {
             DecimalType decimalType = (DecimalType) type;
             if (decimalType.isShort()) {
                 return BigInteger.valueOf(cursor.getLong(field));
@@ -684,12 +684,12 @@ public abstract class AbstractTestHiveFileFormats
                 Type type = types.get(i);
                 Object fieldFromCursor = getFieldFromCursor(cursor, type, i);
                 if (fieldFromCursor == null) {
-                    assertEquals(null, testColumn.getExpectedValue(), String.format("Expected null for column %s", testColumn.getName()));
+                    assertEquals(null, testColumn.getExpectedValue(), "Expected null for column " + testColumn.getName());
                 }
                 else if (type instanceof DecimalType) {
                     DecimalType decimalType = (DecimalType) type;
                     fieldFromCursor = new BigDecimal((BigInteger) fieldFromCursor, decimalType.getScale());
-                    assertEquals(fieldFromCursor, testColumn.getExpectedValue(), String.format("Wrong value for column %s", testColumn.getName()));
+                    assertEquals(fieldFromCursor, testColumn.getExpectedValue(), "Wrong value for column " + testColumn.getName());
                 }
                 else if (testColumn.getObjectInspector().getTypeName().equals("float")) {
                     assertEquals((float) fieldFromCursor, (float) testColumn.getExpectedValue(), (float) EPSILON);
@@ -707,7 +707,7 @@ public abstract class AbstractTestHiveFileFormats
                     assertEquals(((Number) fieldFromCursor).intValue(), testColumn.getExpectedValue());
                 }
                 else if (testColumn.getObjectInspector().getCategory() == Category.PRIMITIVE) {
-                    assertEquals(fieldFromCursor, testColumn.getExpectedValue(), String.format("Wrong value for column %s", testColumn.getName()));
+                    assertEquals(fieldFromCursor, testColumn.getExpectedValue(), "Wrong value for column " + testColumn.getName());
                 }
                 else {
                     Block expected = (Block) testColumn.getExpectedValue();

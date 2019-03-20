@@ -16,7 +16,6 @@ package io.prestosql.type;
 import com.google.common.collect.ImmutableList;
 import io.prestosql.RowPagesBuilder;
 import io.prestosql.Session;
-import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.metadata.MetadataManager;
 import io.prestosql.operator.DriverYieldSignal;
 import io.prestosql.operator.project.PageProcessor;
@@ -30,12 +29,11 @@ import io.prestosql.sql.gen.ExpressionCompiler;
 import io.prestosql.sql.gen.PageFunctionCompiler;
 import io.prestosql.sql.parser.SqlParser;
 import io.prestosql.sql.planner.Symbol;
-import io.prestosql.sql.planner.SymbolToInputRewriter;
+import io.prestosql.sql.planner.TypeAnalyzer;
 import io.prestosql.sql.planner.TypeProvider;
 import io.prestosql.sql.relational.RowExpression;
 import io.prestosql.sql.relational.SqlToRowExpressionTranslator;
 import io.prestosql.sql.tree.Expression;
-import io.prestosql.sql.tree.NodeRef;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.Fork;
 import org.openjdk.jmh.annotations.Measurement;
@@ -71,14 +69,12 @@ import static io.prestosql.operator.scalar.FunctionAssertions.createExpression;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.DecimalType.createDecimalType;
 import static io.prestosql.spi.type.DoubleType.DOUBLE;
-import static io.prestosql.sql.analyzer.ExpressionAnalyzer.getExpressionTypesFromInput;
 import static io.prestosql.testing.TestingConnectorSession.SESSION;
 import static io.prestosql.testing.TestingSession.testSessionBuilder;
+import static java.lang.String.format;
 import static java.math.BigInteger.ONE;
 import static java.math.BigInteger.ZERO;
-import static java.util.Collections.emptyList;
 import static java.util.stream.Collectors.toList;
-import static java.util.stream.Collectors.toMap;
 import static org.openjdk.jmh.annotations.Scope.Thread;
 
 @State(Scope.Thread)
@@ -116,7 +112,7 @@ public class BenchmarkDecimalOperators
             }
             else {
                 setDoubleMaxValue(Math.pow(9, Integer.valueOf(precision) - SCALE));
-                expression = String.format("CAST(d1 AS DECIMAL(%s, %d))", precision, SCALE);
+                expression = format("CAST(d1 AS DECIMAL(%s, %d))", precision, SCALE);
             }
             generateRandomInputPage();
             generateProcessor(expression);
@@ -548,6 +544,7 @@ public class BenchmarkDecimalOperators
     private static class BaseState
     {
         private final MetadataManager metadata = createTestMetadataManager();
+        private final TypeAnalyzer typeAnalyzer = new TypeAnalyzer(new SqlParser(), metadata);
         private final Session session = testSessionBuilder().build();
         private final Random random = new Random();
 
@@ -611,15 +608,19 @@ public class BenchmarkDecimalOperators
             this.doubleMaxValue = doubleMaxValue;
         }
 
-        private RowExpression rowExpression(String expression)
+        private RowExpression rowExpression(String value)
         {
-            Expression inputReferenceExpression = new SymbolToInputRewriter(sourceLayout).rewrite(createExpression(expression, metadata, TypeProvider.copyOf(symbolTypes)));
+            Expression expression = createExpression(value, metadata, TypeProvider.copyOf(symbolTypes));
 
-            Map<Integer, Type> types = sourceLayout.entrySet().stream()
-                    .collect(toMap(Map.Entry::getValue, entry -> symbolTypes.get(entry.getKey())));
-
-            Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypesFromInput(TEST_SESSION, metadata, SQL_PARSER, types, inputReferenceExpression, emptyList(), WarningCollector.NOOP);
-            return SqlToRowExpressionTranslator.translate(inputReferenceExpression, SCALAR, expressionTypes, metadata.getFunctionRegistry(), metadata.getTypeManager(), TEST_SESSION, true);
+            return SqlToRowExpressionTranslator.translate(
+                    expression,
+                    SCALAR,
+                    typeAnalyzer.getTypes(TEST_SESSION, TypeProvider.copyOf(symbolTypes), expression),
+                    sourceLayout,
+                    metadata.getFunctionRegistry(),
+                    metadata.getTypeManager(),
+                    TEST_SESSION,
+                    true);
         }
 
         private Object generateRandomValue(Type type)
@@ -627,10 +628,10 @@ public class BenchmarkDecimalOperators
             if (type instanceof DoubleType) {
                 return random.nextDouble() * (2L * doubleMaxValue) - doubleMaxValue;
             }
-            else if (type instanceof DecimalType) {
+            if (type instanceof DecimalType) {
                 return randomDecimal((DecimalType) type);
             }
-            else if (type instanceof BigintType) {
+            if (type instanceof BigintType) {
                 int randomInt = random.nextInt();
                 return randomInt == 0 ? 1 : randomInt;
             }
